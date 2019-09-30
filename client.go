@@ -12,13 +12,29 @@ import (
 	"strings"
 )
 
+const (
+	ProtocolText   = "text"
+	ProtocolBinary = "binary"
+	ProtocolMeta   = "meta"
+)
+
 var (
-	crlf        = []byte("\r\n")
-	msgStored   = []byte("STORED\r\n")
-	msgDeleted  = []byte("DELETED\r\n")
-	msgNotFound = []byte("NOT_FOUND\r\n")
-	msgTouched  = []byte("TOUCHED\r\n")
-	msgOk       = []byte("OK\r\n")
+	crlf                 = []byte("\r\n")
+	msgTextProtoStored   = []byte("STORED\r\n")
+	msgTextProtoDeleted  = []byte("DELETED\r\n")
+	msgTextProtoNotFound = []byte("NOT_FOUND\r\n")
+	msgTextProtoTouched  = []byte("TOUCHED\r\n")
+	msgTextProtoOk       = []byte("OK\r\n")
+	msgTextProtoEnd      = []byte("END\r\n")
+
+	valueFormatWithCas = "VALUE %s %d %d %d"
+	valueFormat        = "VALUE %s %d %d"
+)
+
+var (
+	msgMetaProtoEnd     = []byte("EN\r\n")
+	msgMetaProtoStored  = []byte("ST ")
+	msgMetaProtoDeleted = []byte("DE ")
 )
 
 var (
@@ -48,13 +64,25 @@ type Client struct {
 	protocol engine
 }
 
-func NewClient(ctx context.Context, server string) (*Client, error) {
-	engine, err := newTextProtocol(ctx, server)
-	if err != nil {
-		return nil, err
+func NewClient(ctx context.Context, server, protocol string) (*Client, error) {
+	var e engine
+
+	switch protocol {
+	case ProtocolText:
+		engine, err := newTextProtocol(ctx, server)
+		if err != nil {
+			return nil, err
+		}
+		e = engine
+	case ProtocolMeta:
+		engine, err := newMetaProtocol(ctx, server)
+		if err != nil {
+			return nil, err
+		}
+		e = engine
 	}
 	return &Client{
-		protocol: engine,
+		protocol: e,
 	}, nil
 }
 
@@ -80,6 +108,10 @@ func (c *Client) Increment(key string, delta int) (int, error) {
 
 func (c *Client) Decrement(key string, delta int) (int, error) {
 	return c.protocol.Decr(key, delta)
+}
+
+func (c *Client) Touch(key string, expiration int) error {
+	return c.protocol.Touch(key, expiration)
 }
 
 func (c *Client) Flush() error {
@@ -113,7 +145,7 @@ func (t *textProtocol) Get(key string) (*Item, error) {
 	if err != nil {
 		return nil, err
 	}
-	if bytes.Equal(b, []byte("END\r\n")) {
+	if bytes.Equal(b, msgTextProtoEnd) {
 		return nil, ItemNotFound
 	}
 	if !bytes.HasPrefix(b, []byte("VALUE")) {
@@ -121,10 +153,10 @@ func (t *textProtocol) Get(key string) (*Item, error) {
 	}
 	item := &Item{}
 	size := 0
-	p := "VALUE %s %d %d %d"
+	p := valueFormatWithCas
 	scan := []interface{}{&item.Key, &item.Flags, &size, &item.Cas}
 	if bytes.Count(b, []byte(" ")) == 3 {
-		p = "VALUE %s %d %d"
+		p = valueFormat
 		scan = scan[:3]
 	}
 	if _, err := fmt.Fscanf(bytes.NewReader(b), p, scan...); err != nil {
@@ -136,6 +168,14 @@ func (t *textProtocol) Get(key string) (*Item, error) {
 		return nil, err
 	}
 	item.Value = buf[:size]
+
+	b, err = t.conn.ReadSlice('\n')
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(b, msgTextProtoEnd) {
+		return nil, errors.New("memcached: invalid response")
+	}
 
 	return item, nil
 }
@@ -158,16 +198,15 @@ func (t *textProtocol) Delete(key string) error {
 	if err := t.conn.Flush(); err != nil {
 		return err
 	}
-	r := bufio.NewReader(t.conn)
-	b, err := r.ReadSlice('\n')
+	b, err := t.conn.ReadSlice('\n')
 	if err != nil {
 		return err
 	}
 
 	switch {
-	case bytes.Equal(b, msgDeleted):
+	case bytes.Equal(b, msgTextProtoDeleted):
 		return nil
-	case bytes.Equal(b, msgNotFound):
+	case bytes.Equal(b, msgTextProtoNotFound):
 		return ItemNotFound
 	}
 	return nil
@@ -195,7 +234,7 @@ func (t *textProtocol) incrOrDecr(op, key string, delta int) (int, error) {
 	}
 
 	switch {
-	case bytes.Equal(b, msgNotFound):
+	case bytes.Equal(b, msgTextProtoNotFound):
 		return 0, ItemNotFound
 	default:
 		i, err := strconv.Atoi(string(b[:len(b)-2]))
@@ -217,9 +256,9 @@ func (t *textProtocol) Touch(key string, expiration int) error {
 	}
 
 	switch {
-	case bytes.Equal(b, msgTouched):
+	case bytes.Equal(b, msgTextProtoTouched):
 		return nil
-	case bytes.Equal(b, msgNotFound):
+	case bytes.Equal(b, msgTextProtoNotFound):
 		return ItemNotFound
 	}
 
@@ -284,7 +323,7 @@ func (t *textProtocol) Set(item *Item) error {
 	}
 
 	switch {
-	case bytes.Equal(buf, msgStored):
+	case bytes.Equal(buf, msgTextProtoStored):
 		return nil
 	default:
 		return fmt.Errorf("memcached: failed set: %s", string(buf))
@@ -302,7 +341,184 @@ func (t *textProtocol) Flush() error {
 	}
 
 	switch {
-	case bytes.Equal(b, msgOk):
+	case bytes.Equal(b, msgTextProtoOk):
+		return nil
+	default:
+		return fmt.Errorf("memcached: %s", string(b[:len(b)-2]))
+	}
+}
+
+type metaProtocol struct {
+	server string
+	conn   *bufio.ReadWriter
+}
+
+var _ engine = &metaProtocol{}
+
+func newMetaProtocol(ctx context.Context, server string) (*metaProtocol, error) {
+	d := &net.Dialer{}
+	conn, err := d.DialContext(ctx, "tcp", server)
+	if err != nil {
+		return nil, err
+	}
+	return &metaProtocol{conn: bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))}, nil
+}
+
+func (m *metaProtocol) GetMulti(key ...string) ([]*Item, error) {
+	panic("implement me")
+}
+
+func (m *metaProtocol) Get(key string) (*Item, error) {
+	if _, err := fmt.Fprintf(m.conn, "mg %s svf\r\n", key); err != nil {
+		return nil, err
+	}
+	if err := m.conn.Flush(); err != nil {
+		return nil, err
+	}
+	b, err := m.conn.ReadSlice('\n')
+	if err != nil {
+		return nil, err
+	}
+	if bytes.Equal(b, msgMetaProtoEnd) {
+		return nil, ItemNotFound
+	}
+	if !bytes.HasPrefix(b, []byte("VA")) {
+		return nil, errors.New("memcached: invalid response")
+	}
+
+	item := &Item{}
+	size := 0
+	scan := []interface{}{&size, &item.Flags}
+	if _, err := fmt.Fscanf(bytes.NewReader(b), "VA svf %d %d", scan...); err != nil {
+		return nil, err
+	}
+
+	buf := make([]byte, size+2)
+	if _, err := io.ReadFull(m.conn, buf); err != nil {
+		return nil, err
+	}
+	item.Value = buf[:size]
+
+	b, err = m.conn.ReadSlice('\n')
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(b, msgMetaProtoEnd) {
+		return nil, errors.New("memcached: invalid response")
+	}
+	return item, nil
+}
+
+func (m *metaProtocol) Set(item *Item) error {
+	if _, err := fmt.Fprintf(m.conn, "ms %s S %d\r\n", item.Key, len(item.Value)); err != nil {
+		return err
+	}
+	if _, err := m.conn.Write(append(item.Value, crlf...)); err != nil {
+		return err
+	}
+	if err := m.conn.Flush(); err != nil {
+		return err
+	}
+	b, err := m.conn.ReadSlice('\n')
+	if err != nil {
+		return err
+	}
+	if bytes.HasPrefix(b, msgMetaProtoStored) {
+		return nil
+	}
+
+	return errors.New("memcached: failed set")
+}
+
+func (m *metaProtocol) Delete(key string) error {
+	if _, err := fmt.Fprintf(m.conn, "md %s\r\n", key); err != nil {
+		return err
+	}
+	if err := m.conn.Flush(); err != nil {
+		return err
+	}
+	b, err := m.conn.ReadSlice('\n')
+	if err != nil {
+		return err
+	}
+
+	switch {
+	case bytes.HasPrefix(b, msgMetaProtoDeleted):
+		return nil
+	default:
+		return errors.New("memcached: failed delete")
+	}
+}
+
+// Incr is increment value when if exist key.
+// implement is same as textProtocol.Incr.
+func (m *metaProtocol) Incr(key string, delta int) (int, error) {
+	return m.incrOrDecr("incr", key, delta)
+}
+
+// Decr is decrement value when if exist key.
+// implement is same as textProtocol.Decr.
+func (m *metaProtocol) Decr(key string, delta int) (int, error) {
+	return m.incrOrDecr("decr", key, delta)
+}
+
+func (m *metaProtocol) incrOrDecr(op, key string, delta int) (int, error) {
+	if _, err := fmt.Fprintf(m.conn, "%s %s %d\r\n", op, key, delta); err != nil {
+		return 0, err
+	}
+	if err := m.conn.Flush(); err != nil {
+		return 0, err
+	}
+	b, err := m.conn.ReadSlice('\n')
+	if err != nil {
+		return 0, err
+	}
+
+	switch {
+	case bytes.Equal(b, msgTextProtoNotFound):
+		return 0, ItemNotFound
+	default:
+		i, err := strconv.Atoi(string(b[:len(b)-2]))
+		if err != nil {
+			return 0, err
+		}
+		return i, nil
+	}
+}
+
+func (m *metaProtocol) Touch(key string, expiration int) error {
+	if _, err := fmt.Fprintf(m.conn, "md %s IT %d\r\n", key, expiration); err != nil {
+		return err
+	}
+	if err := m.conn.Flush(); err != nil {
+		return err
+	}
+
+	b, err := m.conn.ReadSlice('\n')
+	if err != nil {
+		return err
+	}
+
+	switch {
+	case bytes.HasPrefix(b, msgMetaProtoDeleted):
+		return nil
+	default:
+		return errors.New("memcached: failed touch")
+	}
+}
+
+func (m *metaProtocol) Flush() error {
+	if _, err := fmt.Fprint(m.conn, "flush_all"); err != nil {
+		return err
+	}
+	r := bufio.NewReader(m.conn)
+	b, err := r.ReadSlice('\n')
+	if err != nil {
+		return err
+	}
+
+	switch {
+	case bytes.Equal(b, msgTextProtoOk):
 		return nil
 	default:
 		return fmt.Errorf("memcached: %s", string(b[:len(b)-2]))
