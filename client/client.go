@@ -1,4 +1,4 @@
-package memcached
+package client
 
 import (
 	"bufio"
@@ -135,9 +135,9 @@ func newTextProtocol(ctx context.Context, server string) (*textProtocol, error) 
 }
 
 func (t *textProtocol) Get(key string) (*Item, error) {
-	t.conn.WriteString("get ")
-	t.conn.WriteString(key)
-	t.conn.Write(crlf)
+	if _, err := fmt.Fprintf(t.conn, "get %s\r\n", key); err != nil {
+		return nil, err
+	}
 	if err := t.conn.Flush(); err != nil {
 		return nil, err
 	}
@@ -181,9 +181,9 @@ func (t *textProtocol) Get(key string) (*Item, error) {
 }
 
 func (t *textProtocol) GetMulti(keys ...string) ([]*Item, error) {
-	t.conn.WriteString("gets ")
-	t.conn.WriteString(strings.Join(keys, " "))
-	t.conn.Write(crlf)
+	if _, err := fmt.Fprintf(t.conn, "gets %s\r\n", strings.Join(keys, " ")); err != nil {
+		return nil, err
+	}
 	if err := t.conn.Flush(); err != nil {
 		return nil, err
 	}

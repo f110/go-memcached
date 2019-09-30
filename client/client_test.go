@@ -1,4 +1,4 @@
-package memcached
+package client
 
 import (
 	"bytes"
