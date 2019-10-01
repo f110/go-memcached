@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 const (
@@ -38,6 +40,34 @@ var (
 )
 
 var (
+	magicRequest  byte = 0x80
+	magicResponse byte = 0x81
+)
+
+const (
+	binaryOpcodeGet byte = iota
+	binaryOpcodeSet
+	binaryOpcodeAdd
+	binaryOpcodeReplace
+	binaryOpcodeDelete
+	binaryOpcodeIncrement
+	binaryOpcodeDecrement
+	binaryOpcodeQuit
+	binaryOpcodeFlush
+	binaryOpcodeTouch byte = 28 // 0x1c
+)
+
+var binaryStatus = map[uint16]string{
+	1:   "key not found",
+	2:   "key exists",
+	3:   "value too large",
+	4:   "invalid arguments",
+	6:   "non-numeric value",
+	129: "unknown command",
+	130: "out of memory",
+}
+
+var (
 	ItemNotFound = errors.New("mecached: not found")
 )
 
@@ -54,8 +84,8 @@ type engine interface {
 	GetMulti(key ...string) ([]*Item, error)
 	Set(item *Item) error
 	Delete(key string) error
-	Incr(key string, delta int) (int, error)
-	Decr(key string, delta int) (int, error)
+	Incr(key string, delta int) (int64, error)
+	Decr(key string, delta int) (int64, error)
 	Touch(key string, expiration int) error
 	Flush() error
 }
@@ -76,6 +106,12 @@ func NewClient(ctx context.Context, server, protocol string) (*Client, error) {
 		e = engine
 	case ProtocolMeta:
 		engine, err := newMetaProtocol(ctx, server)
+		if err != nil {
+			return nil, err
+		}
+		e = engine
+	case ProtocolBinary:
+		engine, err := newBinaryProtocol(ctx, server)
 		if err != nil {
 			return nil, err
 		}
@@ -102,11 +138,11 @@ func (c *Client) Delete(key string) error {
 	return c.protocol.Delete(key)
 }
 
-func (c *Client) Increment(key string, delta int) (int, error) {
+func (c *Client) Increment(key string, delta int) (int64, error) {
 	return c.protocol.Incr(key, delta)
 }
 
-func (c *Client) Decrement(key string, delta int) (int, error) {
+func (c *Client) Decrement(key string, delta int) (int64, error) {
 	return c.protocol.Decr(key, delta)
 }
 
@@ -212,15 +248,15 @@ func (t *textProtocol) Delete(key string) error {
 	return nil
 }
 
-func (t *textProtocol) Incr(key string, delta int) (int, error) {
+func (t *textProtocol) Incr(key string, delta int) (int64, error) {
 	return t.incrOrDecr("incr", key, delta)
 }
 
-func (t *textProtocol) Decr(key string, delta int) (int, error) {
+func (t *textProtocol) Decr(key string, delta int) (int64, error) {
 	return t.incrOrDecr("decr", key, delta)
 }
 
-func (t *textProtocol) incrOrDecr(op, key string, delta int) (int, error) {
+func (t *textProtocol) incrOrDecr(op, key string, delta int) (int64, error) {
 	if _, err := fmt.Fprintf(t.conn, "%s %s %d\r\n", op, key, delta); err != nil {
 		return 0, err
 	}
@@ -237,7 +273,7 @@ func (t *textProtocol) incrOrDecr(op, key string, delta int) (int, error) {
 	case bytes.Equal(b, msgTextProtoNotFound):
 		return 0, ItemNotFound
 	default:
-		i, err := strconv.Atoi(string(b[:len(b)-2]))
+		i, err := strconv.ParseInt(string(b[:len(b)-2]), 10, 64)
 		if err != nil {
 			return 0, err
 		}
@@ -452,17 +488,17 @@ func (m *metaProtocol) Delete(key string) error {
 
 // Incr is increment value when if exist key.
 // implement is same as textProtocol.Incr.
-func (m *metaProtocol) Incr(key string, delta int) (int, error) {
+func (m *metaProtocol) Incr(key string, delta int) (int64, error) {
 	return m.incrOrDecr("incr", key, delta)
 }
 
 // Decr is decrement value when if exist key.
 // implement is same as textProtocol.Decr.
-func (m *metaProtocol) Decr(key string, delta int) (int, error) {
+func (m *metaProtocol) Decr(key string, delta int) (int64, error) {
 	return m.incrOrDecr("decr", key, delta)
 }
 
-func (m *metaProtocol) incrOrDecr(op, key string, delta int) (int, error) {
+func (m *metaProtocol) incrOrDecr(op, key string, delta int) (int64, error) {
 	if _, err := fmt.Fprintf(m.conn, "%s %s %d\r\n", op, key, delta); err != nil {
 		return 0, err
 	}
@@ -478,7 +514,7 @@ func (m *metaProtocol) incrOrDecr(op, key string, delta int) (int, error) {
 	case bytes.Equal(b, msgTextProtoNotFound):
 		return 0, ItemNotFound
 	default:
-		i, err := strconv.Atoi(string(b[:len(b)-2]))
+		i, err := strconv.ParseInt(string(b[:len(b)-2]), 10, 64)
 		if err != nil {
 			return 0, err
 		}
@@ -511,8 +547,7 @@ func (m *metaProtocol) Flush() error {
 	if _, err := fmt.Fprint(m.conn, "flush_all"); err != nil {
 		return err
 	}
-	r := bufio.NewReader(m.conn)
-	b, err := r.ReadSlice('\n')
+	b, err := m.conn.ReadSlice('\n')
 	if err != nil {
 		return err
 	}
@@ -523,4 +558,365 @@ func (m *metaProtocol) Flush() error {
 	default:
 		return fmt.Errorf("memcached: %s", string(b[:len(b)-2]))
 	}
+}
+
+type binaryProtocol struct {
+	server string
+	conn   *bufio.ReadWriter
+
+	reqHeaderPool *sync.Pool
+	resHeaderPool *sync.Pool
+}
+
+var _ engine = &binaryProtocol{}
+
+func newBinaryProtocol(ctx context.Context, server string) (*binaryProtocol, error) {
+	d := &net.Dialer{}
+	conn, err := d.DialContext(ctx, "tcp", server)
+	if err != nil {
+		return nil, err
+	}
+	return &binaryProtocol{
+		conn: bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
+		reqHeaderPool: &sync.Pool{New: func() interface{} {
+			return newBinaryRequestHeader()
+		}},
+		resHeaderPool: &sync.Pool{New: func() interface{} {
+			return newBinaryResponseHeader()
+		}},
+	}, nil
+}
+
+func (b *binaryProtocol) Get(key string) (*Item, error) {
+	header := b.reqHeaderPool.Get().(*binaryRequestHeader)
+	defer b.reqHeaderPool.Put(header)
+	header.Reset()
+
+	header.Opcode = binaryOpcodeGet
+	header.KeyLength = uint16(len(key))
+	header.TotalBodyLength = uint32(len(key))
+	if err := header.EncodeTo(b.conn); err != nil {
+		return nil, err
+	}
+	b.conn.Write([]byte(key))
+	if err := b.conn.Flush(); err != nil {
+		return nil, err
+	}
+
+	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
+	defer b.resHeaderPool.Put(resHeader)
+
+	if err := resHeader.Read(b.conn); err != nil {
+		return nil, err
+	}
+
+	buf := make([]byte, resHeader.TotalBodyLength)
+	if _, err := io.ReadFull(b.conn, buf); err != nil {
+		return nil, err
+	}
+
+	if resHeader.Status != 0 {
+		if v, ok := binaryStatus[resHeader.Status]; ok {
+			switch resHeader.Status {
+			case 1: // key not found
+				return nil, ItemNotFound
+			default:
+				return nil, fmt.Errorf("memcached: error %s", v)
+			}
+		}
+		return nil, fmt.Errorf("memcached: unknown error %d", resHeader.Status)
+	}
+
+	return &Item{
+		Key:   key,
+		Value: buf[uint16(resHeader.ExtraLength)+resHeader.KeyLength:],
+		Flags: int(binary.BigEndian.Uint32(buf[:resHeader.ExtraLength])),
+	}, nil
+}
+
+func (b *binaryProtocol) GetMulti(key ...string) ([]*Item, error) {
+	panic("implement me")
+}
+
+func (b *binaryProtocol) Set(item *Item) error {
+	extra := make([]byte, 8)
+	binary.BigEndian.PutUint32(extra[4:8], uint32(item.Expiration))
+	header := b.reqHeaderPool.Get().(*binaryRequestHeader)
+	defer b.reqHeaderPool.Put(header)
+	header.Reset()
+
+	header.Opcode = binaryOpcodeSet
+	header.KeyLength = uint16(len(item.Key))
+	header.ExtraLength = uint8(len(extra))
+	header.TotalBodyLength = uint32(len(item.Key) + len(item.Value) + len(extra))
+	if err := header.EncodeTo(b.conn); err != nil {
+		return err
+	}
+	b.conn.Write(extra)
+	b.conn.Write([]byte(item.Key))
+	b.conn.Write(item.Value)
+	if err := b.conn.Flush(); err != nil {
+		return err
+	}
+
+	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
+	defer b.resHeaderPool.Put(resHeader)
+	if err := resHeader.Read(b.conn); err != nil {
+		return err
+	}
+	if resHeader.Opcode != binaryOpcodeSet {
+		return errors.New("memcached: invalid response")
+	}
+
+	if resHeader.Status != 0 {
+		if v, ok := binaryStatus[resHeader.Status]; ok {
+			return fmt.Errorf("memcached: error %s", v)
+		} else {
+			return fmt.Errorf("memcached: unknown error %d", resHeader.Status)
+		}
+	}
+
+	return nil
+}
+
+func (b *binaryProtocol) Delete(key string) error {
+	header := b.reqHeaderPool.Get().(*binaryRequestHeader)
+	defer b.reqHeaderPool.Put(header)
+	header.Reset()
+
+	header.Opcode = binaryOpcodeDelete
+	header.KeyLength = uint16(len(key))
+	header.TotalBodyLength = uint32(len(key))
+	if err := header.EncodeTo(b.conn); err != nil {
+		return err
+	}
+	b.conn.Write([]byte(key))
+	if err := b.conn.Flush(); err != nil {
+		return err
+	}
+
+	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
+	defer b.resHeaderPool.Put(resHeader)
+	if err := resHeader.Read(b.conn); err != nil {
+		return err
+	}
+	if resHeader.Opcode != binaryOpcodeDelete {
+		return errors.New("memcached: invalid response")
+	}
+
+	if resHeader.Status != 0 {
+		if v, ok := binaryStatus[resHeader.Status]; ok {
+			return fmt.Errorf("memcached: error %s", v)
+		} else {
+			return fmt.Errorf("memcached: unknown error %d", resHeader.Status)
+		}
+	}
+
+	return nil
+}
+
+func (b *binaryProtocol) Incr(key string, delta int) (int64, error) {
+	return b.incrOrDecr(binaryOpcodeIncrement, key, delta)
+}
+
+func (b *binaryProtocol) Decr(key string, delta int) (int64, error) {
+	return b.incrOrDecr(binaryOpcodeDecrement, key, delta)
+}
+
+func (b *binaryProtocol) incrOrDecr(opcode byte, key string, delta int) (int64, error) {
+	extra := make([]byte, 20)
+	binary.BigEndian.PutUint64(extra[:8], uint64(delta))
+	binary.BigEndian.PutUint64(extra[8:16], 1)
+	binary.BigEndian.PutUint32(extra[16:20], 600)
+	header := b.reqHeaderPool.Get().(*binaryRequestHeader)
+	defer b.reqHeaderPool.Put(header)
+
+	header.Opcode = opcode
+	header.KeyLength = uint16(len(key))
+	header.ExtraLength = uint8(len(extra))
+	header.TotalBodyLength = uint32(len(key) + len(extra))
+
+	if err := header.EncodeTo(b.conn); err != nil {
+		return 0, err
+	}
+	b.conn.Write(extra)
+	b.conn.Write([]byte(key))
+	if err := b.conn.Flush(); err != nil {
+		return 0, err
+	}
+
+	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
+	defer b.resHeaderPool.Put(resHeader)
+
+	if err := resHeader.Read(b.conn); err != nil {
+		return 0, err
+	}
+	if resHeader.Opcode != opcode {
+		return 0, errors.New("memcached: invalid response")
+	}
+
+	var body []byte
+	if resHeader.TotalBodyLength > 0 {
+		buf := make([]byte, resHeader.TotalBodyLength)
+		if _, err := io.ReadFull(b.conn, buf); err != nil {
+			return 0, err
+		}
+		body = buf
+	}
+
+	if resHeader.Status != 0 {
+		if v, ok := binaryStatus[resHeader.Status]; ok {
+			additional := ""
+			if len(body) > 0 {
+				additional = " (" + string(body) + ")"
+			}
+			return 0, fmt.Errorf("memcached: error %s%s", v, additional)
+		} else {
+			return 0, fmt.Errorf("memcached: unknown error %d (%s)", resHeader.Status, string(body))
+		}
+	}
+
+	return int64(binary.BigEndian.Uint64(body)), nil
+}
+
+func (b *binaryProtocol) Touch(key string, expiration int) error {
+	extra := make([]byte, 4)
+	binary.BigEndian.PutUint32(extra, uint32(expiration))
+	header := b.reqHeaderPool.Get().(*binaryRequestHeader)
+	defer b.reqHeaderPool.Put(header)
+	header.Reset()
+
+	header.Opcode = binaryOpcodeTouch
+	header.ExtraLength = uint8(len(extra))
+	header.KeyLength = uint16(len(key))
+	header.TotalBodyLength = uint32(len(key) + len(extra))
+	if err := header.EncodeTo(b.conn); err != nil {
+		return err
+	}
+	b.conn.Write(extra)
+	b.conn.Write([]byte(key))
+	if err := b.conn.Flush(); err != nil {
+		return err
+	}
+
+	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
+	defer b.resHeaderPool.Put(resHeader)
+
+	if err := resHeader.Read(b.conn); err != nil {
+		return err
+	}
+
+	if resHeader.Status != 0 {
+		if v, ok := binaryStatus[resHeader.Status]; ok {
+			return fmt.Errorf("memcached: error %s", v)
+		} else {
+			return fmt.Errorf("memcached: unknown error %d", resHeader.Status)
+		}
+	}
+
+	return nil
+}
+
+func (b *binaryProtocol) Flush() error {
+	header := b.reqHeaderPool.Get().(*binaryRequestHeader)
+	defer b.reqHeaderPool.Put(header)
+	header.Reset()
+
+	header.Opcode = binaryOpcodeFlush
+	if err := header.EncodeTo(b.conn); err != nil {
+		return err
+	}
+
+	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
+	defer b.resHeaderPool.Put(resHeader)
+
+	if err := resHeader.Read(b.conn); err != nil {
+		return err
+	}
+	if resHeader.Opcode != binaryOpcodeFlush {
+		return errors.New("memcached: invalid response")
+	}
+
+	return nil
+}
+
+type binaryRequestHeader struct {
+	Opcode          byte
+	KeyLength       uint16
+	ExtraLength     uint8
+	DataType        byte
+	VBucketId       uint16
+	TotalBodyLength uint32
+	Opaque          uint32
+	CAS             uint64
+
+	buf []byte
+}
+
+func newBinaryRequestHeader() *binaryRequestHeader {
+	return &binaryRequestHeader{buf: make([]byte, 24)}
+}
+
+func (h *binaryRequestHeader) EncodeTo(w io.Writer) error {
+	h.buf[0] = magicRequest
+	h.buf[1] = h.Opcode
+	binary.BigEndian.PutUint16(h.buf[2:4], h.KeyLength)        // ken len
+	h.buf[4] = h.ExtraLength                                   // extra len
+	h.buf[5] = h.DataType                                      // data type
+	binary.BigEndian.PutUint16(h.buf[6:8], 0)                  // vbucket id
+	binary.BigEndian.PutUint32(h.buf[8:12], h.TotalBodyLength) // total body len
+	binary.BigEndian.PutUint32(h.buf[12:16], 0)                // opaque
+	binary.BigEndian.PutUint64(h.buf[16:24], 0)                //cas
+
+	if _, err := w.Write(h.buf); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (h *binaryRequestHeader) Reset() {
+	h.Opcode = 0
+	h.KeyLength = 0
+	h.ExtraLength = 0
+	h.DataType = 0
+	h.VBucketId = 0
+	h.TotalBodyLength = 0
+	h.Opaque = 0
+	h.CAS = 0
+}
+
+type binaryResponseHeader struct {
+	Opcode          byte
+	KeyLength       uint16
+	ExtraLength     uint8
+	DataType        byte
+	Status          uint16
+	TotalBodyLength uint32
+	Opaque          uint32
+	CAS             uint64
+
+	buf []byte
+}
+
+func newBinaryResponseHeader() *binaryResponseHeader {
+	return &binaryResponseHeader{buf: make([]byte, 24)}
+}
+
+func (h *binaryResponseHeader) Read(r io.Reader) error {
+	if _, err := io.ReadFull(r, h.buf); err != nil {
+		return err
+	}
+	if h.buf[0] != magicResponse {
+		return errors.New("memcached: invalid response")
+	}
+	h.Opcode = h.buf[1]
+	h.KeyLength = binary.BigEndian.Uint16(h.buf[2:4])
+	h.ExtraLength = h.buf[4]
+	h.DataType = h.buf[5]
+	h.Status = binary.BigEndian.Uint16(h.buf[6:8])
+	h.TotalBodyLength = binary.BigEndian.Uint32(h.buf[8:12])
+	h.Opaque = binary.BigEndian.Uint32(h.buf[12:16])
+	h.CAS = binary.BigEndian.Uint64(h.buf[16:24])
+
+	return nil
 }

@@ -9,12 +9,15 @@ import (
 
 func TestClient_Get(t *testing.T) {
 	testFn := func(t *testing.T, c *Client) {
-		if err := c.Set(&Item{Key: "test", Value: []byte("OK")}); err != nil {
+		if err := c.Set(&Item{Key: t.Name(), Value: []byte("OK")}); err != nil {
 			t.Fatal(err)
 		}
-		_, err := c.Get("test")
+		item, err := c.Get(t.Name())
 		if err != nil {
 			t.Fatal(err)
+		}
+		if !bytes.Equal(item.Value, []byte("OK")) {
+			t.Errorf("unexpected value: %v", item.Value)
 		}
 	}
 
@@ -35,14 +38,23 @@ func TestClient_Get(t *testing.T) {
 
 		testFn(t, c)
 	})
+
+	t.Run("BinaryProtocol", func(t *testing.T) {
+		c, err := NewClient(context.Background(), "localhost:11211", ProtocolBinary)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		testFn(t, c)
+	})
 }
 
 func TestClient_Set(t *testing.T) {
 	testFn := func(t *testing.T, c *Client) {
-		if err := c.Set(&Item{Key: "client", Value: []byte("hoge")}); err != nil {
+		if err := c.Set(&Item{Key: t.Name(), Value: []byte("hoge")}); err != nil {
 			t.Fatal(err)
 		}
-		item, err := c.Get("client")
+		item, err := c.Get(t.Name())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -62,6 +74,15 @@ func TestClient_Set(t *testing.T) {
 
 	t.Run("MetaProtocol", func(t *testing.T) {
 		c, err := NewClient(context.Background(), "localhost:11212", ProtocolMeta)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		testFn(t, c)
+	})
+
+	t.Run("BinaryProtocol", func(t *testing.T) {
+		c, err := NewClient(context.Background(), "localhost:11211", ProtocolBinary)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -122,6 +143,15 @@ func TestClient_Delete(t *testing.T) {
 
 		testFn(t, c)
 	})
+
+	t.Run("BinaryProtocol", func(t *testing.T) {
+		c, err := NewClient(context.Background(), "localhost:11211", ProtocolBinary)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		testFn(t, c)
+	})
 }
 
 func TestClient_Touch(t *testing.T) {
@@ -145,6 +175,56 @@ func TestClient_Touch(t *testing.T) {
 
 	t.Run("MetaProtocol", func(t *testing.T) {
 		c, err := NewClient(context.Background(), "localhost:11212", ProtocolMeta)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		testFn(t, c)
+	})
+}
+
+func TestClient_Increment(t *testing.T) {
+	testFn := func(t *testing.T, c *Client) {
+		if err := c.Set(&Item{Key: t.Name(), Value: []byte("1")}); err != nil {
+			t.Fatal(err)
+		}
+
+		newValue, err := c.Increment(t.Name(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if newValue != 2 {
+			t.Errorf("unexpected return value: %d", newValue)
+		}
+	}
+
+	t.Run("BinaryProtocol", func(t *testing.T) {
+		c, err := NewClient(context.Background(), "localhost:11211", ProtocolBinary)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		testFn(t, c)
+	})
+}
+
+func TestClient_Decrement(t *testing.T) {
+	testFn := func(t *testing.T, c *Client) {
+		if err := c.Set(&Item{Key: t.Name(), Value: []byte("10")}); err != nil {
+			t.Fatal()
+		}
+
+		newValue, err := c.Decrement(t.Name(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if newValue != 9 {
+			t.Errorf("unexpected return value: %d", newValue)
+		}
+	}
+
+	t.Run("BinaryProtocol", func(t *testing.T) {
+		c, err := NewClient(context.Background(), "localhost:11211", ProtocolBinary)
 		if err != nil {
 			t.Fatal(err)
 		}
