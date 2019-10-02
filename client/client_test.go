@@ -92,22 +92,53 @@ func TestClient_Set(t *testing.T) {
 }
 
 func TestClient_GetMulti(t *testing.T) {
-	c, err := NewClient(context.Background(), "localhost:11211", ProtocolText)
-	if err != nil {
-		t.Fatal(err)
+	testFn := func(t *testing.T, c *Client) {
+		if err := c.Set(&Item{Key: "test", Value: []byte("OK1")}); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Set(&Item{Key: "client", Value: []byte("OK2")}); err != nil {
+			t.Fatal(err)
+		}
+
+		items, err := c.GetMulti("test", "client")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(items) != 2 {
+			t.Fatalf("expected returing 2 items: %d", len(items))
+		}
+		for _, v := range items {
+			log.Print(v.Key)
+		}
 	}
 
-	items, err := c.GetMulti("test", "client")
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Run("TextProtocol", func(t *testing.T) {
+		c, err := NewClient(context.Background(), "localhost:11211", ProtocolText)
+		if err != nil {
+			t.Fatal(err)
+		}
 
-	if len(items) != 2 {
-		t.Fatalf("expected returing 2 items: %d", len(items))
-	}
-	for _, v := range items {
-		log.Print(v.Key)
-	}
+		testFn(t, c)
+	})
+
+	t.Run("MetaProtocol", func(t *testing.T) {
+		c, err := NewClient(context.Background(), "localhost:11212", ProtocolMeta)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		testFn(t, c)
+	})
+
+	t.Run("BinaryProtocol", func(t *testing.T) {
+		c, err := NewClient(context.Background(), "localhost:11211", ProtocolBinary)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		testFn(t, c)
+	})
 }
 
 func TestClient_Delete(t *testing.T) {

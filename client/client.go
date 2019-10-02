@@ -54,6 +54,13 @@ const (
 	binaryOpcodeDecrement
 	binaryOpcodeQuit
 	binaryOpcodeFlush
+	binaryOpcodeGetQ
+	binaryOpcodeNoop
+	binaryOpcodeVersion
+	binaryOpcodeGetK
+	binaryOpcodeGetKQ
+	binaryOpcodeAppend
+	binaryOpcodePrepend
 	binaryOpcodeTouch byte = 28 // 0x1c
 )
 
@@ -81,7 +88,7 @@ type Item struct {
 
 type engine interface {
 	Get(key string) (*Item, error)
-	GetMulti(key ...string) ([]*Item, error)
+	GetMulti(keys ...string) ([]*Item, error)
 	Set(item *Item) error
 	Delete(key string) error
 	Incr(key string, delta int) (int64, error)
@@ -223,8 +230,7 @@ func (t *textProtocol) GetMulti(keys ...string) ([]*Item, error) {
 	if err := t.conn.Flush(); err != nil {
 		return nil, err
 	}
-	r := bufio.NewReader(t.conn)
-	return t.parseGetResponse(r)
+	return t.parseGetResponse(t.conn.Reader)
 }
 
 func (t *textProtocol) Delete(key string) error {
@@ -285,8 +291,10 @@ func (t *textProtocol) Touch(key string, expiration int) error {
 	if _, err := fmt.Fprintf(t.conn, "touch %s %d\r\n", key, expiration); err != nil {
 		return err
 	}
-	r := bufio.NewReader(t.conn)
-	b, err := r.ReadSlice('\n')
+	if err := t.conn.Flush(); err != nil {
+		return err
+	}
+	b, err := t.conn.ReadSlice('\n')
 	if err != nil {
 		return err
 	}
@@ -400,10 +408,6 @@ func newMetaProtocol(ctx context.Context, server string) (*metaProtocol, error) 
 	return &metaProtocol{conn: bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))}, nil
 }
 
-func (m *metaProtocol) GetMulti(key ...string) ([]*Item, error) {
-	panic("implement me")
-}
-
 func (m *metaProtocol) Get(key string) (*Item, error) {
 	if _, err := fmt.Fprintf(m.conn, "mg %s svf\r\n", key); err != nil {
 		return nil, err
@@ -411,6 +415,40 @@ func (m *metaProtocol) Get(key string) (*Item, error) {
 	if err := m.conn.Flush(); err != nil {
 		return nil, err
 	}
+
+	return m.parseGetResponse("svf")
+}
+
+func (m *metaProtocol) GetMulti(keys ...string) ([]*Item, error) {
+	for _, key := range keys {
+		if _, err := fmt.Fprintf(m.conn, "mg %s svfk\r\n", key); err != nil {
+			return nil, err
+		}
+	}
+	m.conn.WriteString("mn\r\n")
+	if err := m.conn.Flush(); err != nil {
+		return nil, err
+	}
+
+	items := make([]*Item, 0)
+MultiRead:
+	for {
+		item, err := m.parseGetResponse("svfk")
+		if err != nil {
+			switch err {
+			case ItemNotFound:
+				break MultiRead
+			default:
+				return nil, err
+			}
+		}
+		items = append(items, item)
+	}
+
+	return items, nil
+}
+
+func (m *metaProtocol) parseGetResponse(flags string) (*Item, error) {
 	b, err := m.conn.ReadSlice('\n')
 	if err != nil {
 		return nil, err
@@ -419,16 +457,28 @@ func (m *metaProtocol) Get(key string) (*Item, error) {
 		return nil, ItemNotFound
 	}
 	if !bytes.HasPrefix(b, []byte("VA")) {
-		return nil, errors.New("memcached: invalid response")
+		return nil, errors.New("memcached: invalid get response")
 	}
-
 	item := &Item{}
 	size := 0
-	scan := []interface{}{&size, &item.Flags}
-	if _, err := fmt.Fscanf(bytes.NewReader(b), "VA svf %d %d", scan...); err != nil {
+	scan := make([]interface{}, 0, len(flags))
+	format := ""
+	for _, t := range flags {
+		switch t {
+		case 's':
+			scan = append(scan, &size)
+			format += " %d"
+		case 'f':
+			scan = append(scan, &item.Flags)
+			format += " %d"
+		case 'k':
+			scan = append(scan, &item.Key)
+			format += " %s"
+		}
+	}
+	if _, err := fmt.Fscanf(bytes.NewReader(b), "VA "+flags+format, scan...); err != nil {
 		return nil, err
 	}
-
 	buf := make([]byte, size+2)
 	if _, err := io.ReadFull(m.conn, buf); err != nil {
 		return nil, err
@@ -440,8 +490,9 @@ func (m *metaProtocol) Get(key string) (*Item, error) {
 		return nil, err
 	}
 	if !bytes.Equal(b, msgMetaProtoEnd) {
-		return nil, errors.New("memcached: invalid response")
+		return nil, errors.New("memcached: invalid get response")
 	}
+
 	return item, nil
 }
 
@@ -634,8 +685,65 @@ func (b *binaryProtocol) Get(key string) (*Item, error) {
 	}, nil
 }
 
-func (b *binaryProtocol) GetMulti(key ...string) ([]*Item, error) {
-	panic("implement me")
+func (b *binaryProtocol) GetMulti(keys ...string) ([]*Item, error) {
+	header := b.reqHeaderPool.Get().(*binaryRequestHeader)
+	for _, key := range keys {
+		header.Reset()
+		header.Opcode = binaryOpcodeGetKQ
+		header.KeyLength = uint16(len(key))
+		header.TotalBodyLength = uint32(len(key))
+		if err := header.EncodeTo(b.conn); err != nil {
+			return nil, err
+		}
+		b.conn.Write([]byte(key))
+	}
+	b.reqHeaderPool.Put(header)
+
+	header = b.reqHeaderPool.Get().(*binaryRequestHeader)
+	header.Reset()
+	header.Opcode = binaryOpcodeNoop
+	if err := header.EncodeTo(b.conn); err != nil {
+		return nil, err
+	}
+	b.reqHeaderPool.Put(header)
+	if err := b.conn.Flush(); err != nil {
+		return nil, err
+	}
+
+	items := make([]*Item, 0)
+	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
+	for {
+		if err := resHeader.Read(b.conn); err != nil {
+			return nil, err
+		}
+		if resHeader.Opcode == binaryOpcodeNoop {
+			break
+		}
+
+		if resHeader.Status != 0 {
+			if v, ok := binaryStatus[resHeader.Status]; ok {
+				return nil, fmt.Errorf("memcached: error %s", v)
+			}
+			return nil, fmt.Errorf("memcached: unknown error %d", resHeader.Status)
+		}
+
+		buf := make([]byte, resHeader.TotalBodyLength)
+		if _, err := io.ReadFull(b.conn, buf); err != nil {
+			return nil, err
+		}
+
+		flags := 0
+		if resHeader.ExtraLength > 0 {
+			flags = int(binary.BigEndian.Uint32(buf[:resHeader.ExtraLength]))
+		}
+		items = append(items, &Item{
+			Key:   string(buf[resHeader.ExtraLength : uint16(resHeader.ExtraLength)+resHeader.KeyLength]),
+			Value: buf[uint16(resHeader.ExtraLength)+resHeader.KeyLength:],
+			Flags: flags,
+		})
+	}
+
+	return items, nil
 }
 
 func (b *binaryProtocol) Set(item *Item) error {
