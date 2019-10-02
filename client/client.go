@@ -75,7 +75,8 @@ var binaryStatus = map[uint16]string{
 }
 
 var (
-	ItemNotFound = errors.New("mecached: not found")
+	ItemNotFound = errors.New("memcached: not found")
+	ItemExists   = errors.New("memcached: item exists")
 )
 
 type Item struct {
@@ -90,11 +91,14 @@ type engine interface {
 	Get(key string) (*Item, error)
 	GetMulti(keys ...string) ([]*Item, error)
 	Set(item *Item) error
+	Add(item *Item) error
+	Replace(item *Item) error
 	Delete(key string) error
 	Incr(key string, delta int) (int64, error)
 	Decr(key string, delta int) (int64, error)
 	Touch(key string, expiration int) error
 	Flush() error
+	Version() (string, error)
 }
 
 type Client struct {
@@ -137,6 +141,14 @@ func (c *Client) Set(item *Item) error {
 	return c.protocol.Set(item)
 }
 
+func (c *Client) Add(item *Item) error {
+	return c.protocol.Add(item)
+}
+
+func (c *Client) Replace(item *Item) error {
+	return c.protocol.Replace(item)
+}
+
 func (c *Client) GetMulti(keys ...string) ([]*Item, error) {
 	return c.protocol.GetMulti(keys...)
 }
@@ -159,6 +171,10 @@ func (c *Client) Touch(key string, expiration int) error {
 
 func (c *Client) Flush() error {
 	return c.protocol.Flush()
+}
+
+func (c *Client) Version() (string, error) {
+	return c.protocol.Version()
 }
 
 type textProtocol struct {
@@ -231,6 +247,48 @@ func (t *textProtocol) GetMulti(keys ...string) ([]*Item, error) {
 		return nil, err
 	}
 	return t.parseGetResponse(t.conn.Reader)
+}
+
+func (t *textProtocol) parseGetResponse(r *bufio.Reader) ([]*Item, error) {
+	res := make([]*Item, 0)
+	for {
+		b, err := r.ReadSlice('\n')
+		if err != nil {
+			return nil, err
+		}
+		if bytes.Equal(b, []byte("END\r\n")) {
+			break
+		}
+		s := bytes.Split(b, []byte(" "))
+		if !bytes.Equal(s[0], []byte("VALUE")) {
+			return nil, errors.New("memcached: invalid response")
+		}
+		f, err := strconv.Atoi(string(s[2]))
+		if err != nil {
+			return nil, err
+		}
+		var size int
+		if len(s) == 4 {
+			size, err = strconv.Atoi(string(s[3][:len(s[3])-2]))
+		} else {
+			size, err = strconv.Atoi(string(s[3]))
+		}
+		if err != nil {
+			return nil, err
+		}
+		buf := make([]byte, size+2)
+		item := &Item{
+			Key:   string(s[1]),
+			Flags: f,
+		}
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return nil, err
+		}
+		item.Value = buf[:size]
+		res = append(res, item)
+	}
+
+	return res, nil
 }
 
 func (t *textProtocol) Delete(key string) error {
@@ -309,48 +367,6 @@ func (t *textProtocol) Touch(key string, expiration int) error {
 	return nil
 }
 
-func (t *textProtocol) parseGetResponse(r *bufio.Reader) ([]*Item, error) {
-	res := make([]*Item, 0)
-	for {
-		b, err := r.ReadSlice('\n')
-		if err != nil {
-			return nil, err
-		}
-		if bytes.Equal(b, []byte("END\r\n")) {
-			break
-		}
-		s := bytes.Split(b, []byte(" "))
-		if !bytes.Equal(s[0], []byte("VALUE")) {
-			return nil, errors.New("memcached: invalid response")
-		}
-		f, err := strconv.Atoi(string(s[2]))
-		if err != nil {
-			return nil, err
-		}
-		var size int
-		if len(s) == 4 {
-			size, err = strconv.Atoi(string(s[3][:len(s[3])-2]))
-		} else {
-			size, err = strconv.Atoi(string(s[3]))
-		}
-		if err != nil {
-			return nil, err
-		}
-		buf := make([]byte, size+2)
-		item := &Item{
-			Key:   string(s[1]),
-			Flags: f,
-		}
-		if _, err := io.ReadFull(r, buf); err != nil {
-			return nil, err
-		}
-		item.Value = buf[:size]
-		res = append(res, item)
-	}
-
-	return res, nil
-}
-
 func (t *textProtocol) Set(item *Item) error {
 	if _, err := fmt.Fprintf(t.conn, "set %s %d %d %d\r\n", item.Key, item.Flags, item.Expiration, len(item.Value)); err != nil {
 		return err
@@ -374,12 +390,56 @@ func (t *textProtocol) Set(item *Item) error {
 	}
 }
 
+func (t *textProtocol) Add(item *Item) error {
+	if _, err := fmt.Fprintf(t.conn, "add %s %d %d %d\r\n", item.Key, item.Flags, item.Expiration, len(item.Value)); err != nil {
+		return err
+	}
+	t.conn.Write(item.Value)
+	t.conn.Write(crlf)
+	if err := t.conn.Flush(); err != nil {
+		return err
+	}
+
+	b, err := t.conn.ReadSlice('\n')
+	if err != nil {
+		return err
+	}
+	if bytes.Equal(b, msgTextProtoStored) {
+		return nil
+	}
+
+	return ItemExists
+}
+
+func (t *textProtocol) Replace(item *Item) error {
+	if _, err := fmt.Fprintf(t.conn, "replace %s %d %d %d\r\n", item.Key, item.Flags, item.Expiration, len(item.Value)); err != nil {
+		return err
+	}
+	t.conn.Write(item.Value)
+	t.conn.Write(crlf)
+	if err := t.conn.Flush(); err != nil {
+		return err
+	}
+
+	b, err := t.conn.ReadSlice('\n')
+	if err != nil {
+		return err
+	}
+	if bytes.Equal(b, msgTextProtoStored) {
+		return nil
+	}
+
+	return ItemNotFound
+}
+
 func (t *textProtocol) Flush() error {
 	if _, err := fmt.Fprint(t.conn, "flush_all"); err != nil {
 		return err
 	}
-	r := bufio.NewReader(t.conn)
-	b, err := r.ReadSlice('\n')
+	if err := t.conn.Flush(); err != nil {
+		return err
+	}
+	b, err := t.conn.ReadSlice('\n')
 	if err != nil {
 		return err
 	}
@@ -390,6 +450,25 @@ func (t *textProtocol) Flush() error {
 	default:
 		return fmt.Errorf("memcached: %s", string(b[:len(b)-2]))
 	}
+}
+
+func (t *textProtocol) Version() (string, error) {
+	if _, err := t.conn.WriteString("version\r\n"); err != nil {
+		return "", err
+	}
+	if err := t.conn.Flush(); err != nil {
+		return "", err
+	}
+
+	b, err := t.conn.ReadSlice('\n')
+	if err != nil {
+		return "", err
+	}
+
+	if len(b) > 0 {
+		return strings.TrimPrefix(string(b), "VERSION "), nil
+	}
+	return "", nil
 }
 
 type metaProtocol struct {
@@ -517,6 +596,14 @@ func (m *metaProtocol) Set(item *Item) error {
 	return errors.New("memcached: failed set")
 }
 
+func (m *metaProtocol) Add(item *Item) error {
+	panic("Currently not supported meta command. Use text or binary protocol.")
+}
+
+func (m *metaProtocol) Replace(item *Item) error {
+	panic("Currently not supported meta command. Use text or binary protocol")
+}
+
 func (m *metaProtocol) Delete(key string) error {
 	if _, err := fmt.Fprintf(m.conn, "md %s\r\n", key); err != nil {
 		return err
@@ -609,6 +696,24 @@ func (m *metaProtocol) Flush() error {
 	default:
 		return fmt.Errorf("memcached: %s", string(b[:len(b)-2]))
 	}
+}
+
+func (m *metaProtocol) Version() (string, error) {
+	if _, err := m.conn.WriteString("version\r\n"); err != nil {
+		return "", err
+	}
+	if err := m.conn.Flush(); err != nil {
+		return "", err
+	}
+
+	b, err := m.conn.ReadSlice('\n')
+	if err != nil {
+		return "", err
+	}
+	if len(b) > 0 {
+		return strings.TrimPrefix(string(b), "VERSION "), nil
+	}
+	return "", nil
 }
 
 type binaryProtocol struct {
@@ -749,9 +854,8 @@ func (b *binaryProtocol) GetMulti(keys ...string) ([]*Item, error) {
 func (b *binaryProtocol) Set(item *Item) error {
 	extra := make([]byte, 8)
 	binary.BigEndian.PutUint32(extra[4:8], uint32(item.Expiration))
-	header := b.reqHeaderPool.Get().(*binaryRequestHeader)
-	defer b.reqHeaderPool.Put(header)
-	header.Reset()
+	header := b.getReqHeader()
+	defer b.putReqHeader(header)
 
 	header.Opcode = binaryOpcodeSet
 	header.KeyLength = uint16(len(item.Key))
@@ -787,6 +891,103 @@ func (b *binaryProtocol) Set(item *Item) error {
 	return nil
 }
 
+func (b *binaryProtocol) Add(item *Item) error {
+	extra := make([]byte, 8)
+	binary.BigEndian.PutUint32(extra[4:8], uint32(item.Expiration))
+
+	header := b.getReqHeader()
+	defer b.putReqHeader(header)
+
+	header.Opcode = binaryOpcodeAdd
+	header.KeyLength = uint16(len(item.Key))
+	header.ExtraLength = uint8(len(extra))
+	header.TotalBodyLength = uint32(len(item.Key) + len(item.Value) + len(extra))
+	if err := header.EncodeTo(b.conn); err != nil {
+		return err
+	}
+	b.conn.Write(extra)
+	b.conn.Write([]byte(item.Key))
+	b.conn.Write(item.Value)
+	if err := b.conn.Flush(); err != nil {
+		return err
+	}
+
+	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
+	defer b.resHeaderPool.Put(resHeader)
+	if err := resHeader.Read(b.conn); err != nil {
+		return err
+	}
+	if resHeader.Opcode != binaryOpcodeAdd {
+		return errors.New("memcached: invalid response")
+	}
+
+	if resHeader.Status != 0 {
+		switch resHeader.Status {
+		case 2:
+			return ItemExists
+		default:
+			if v, ok := binaryStatus[resHeader.Status]; ok {
+				return fmt.Errorf("memcached: error %s", v)
+			} else {
+				return fmt.Errorf("memcached: unknown error %d", resHeader.Status)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (b *binaryProtocol) Replace(item *Item) error {
+	extra := make([]byte, 8)
+	binary.BigEndian.PutUint32(extra[4:8], uint32(item.Expiration))
+
+	header := b.getReqHeader()
+	defer b.putReqHeader(header)
+
+	header.Opcode = binaryOpcodeReplace
+	header.KeyLength = uint16(len(item.Key))
+	header.ExtraLength = uint8(len(extra))
+	header.TotalBodyLength = uint32(len(item.Key) + len(item.Value) + len(extra))
+	if err := header.EncodeTo(b.conn); err != nil {
+		return err
+	}
+	b.conn.Write(extra)
+	b.conn.Write([]byte(item.Key))
+	b.conn.Write(item.Value)
+	if err := b.conn.Flush(); err != nil {
+		return err
+	}
+
+	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
+	defer b.resHeaderPool.Put(resHeader)
+	if err := resHeader.Read(b.conn); err != nil {
+		return err
+	}
+	if resHeader.Opcode != binaryOpcodeReplace {
+		return errors.New("memcached: invalid response")
+	}
+
+	buf := make([]byte, resHeader.TotalBodyLength)
+	if _, err := io.ReadFull(b.conn, buf); err != nil {
+		return err
+	}
+
+	if resHeader.Status != 0 {
+		switch resHeader.Status {
+		case 1:
+			return ItemNotFound
+		default:
+			if v, ok := binaryStatus[resHeader.Status]; ok {
+				return fmt.Errorf("memcached: error %s", v)
+			} else {
+				return fmt.Errorf("memcached: unknown error %d", resHeader.Status)
+			}
+		}
+	}
+
+	return nil
+}
+
 func (b *binaryProtocol) Delete(key string) error {
 	header := b.reqHeaderPool.Get().(*binaryRequestHeader)
 	defer b.reqHeaderPool.Put(header)
@@ -812,11 +1013,21 @@ func (b *binaryProtocol) Delete(key string) error {
 		return errors.New("memcached: invalid response")
 	}
 
+	buf := make([]byte, resHeader.TotalBodyLength)
+	if _, err := io.ReadFull(b.conn, buf); err != nil {
+		return err
+	}
+
 	if resHeader.Status != 0 {
-		if v, ok := binaryStatus[resHeader.Status]; ok {
-			return fmt.Errorf("memcached: error %s", v)
-		} else {
-			return fmt.Errorf("memcached: unknown error %d", resHeader.Status)
+		switch resHeader.Status {
+		case 1: // key not found
+			return ItemNotFound
+		default:
+			if v, ok := binaryStatus[resHeader.Status]; ok {
+				return fmt.Errorf("memcached: error %s", v)
+			} else {
+				return fmt.Errorf("memcached: unknown error %d", resHeader.Status)
+			}
 		}
 	}
 
@@ -926,12 +1137,14 @@ func (b *binaryProtocol) Touch(key string, expiration int) error {
 }
 
 func (b *binaryProtocol) Flush() error {
-	header := b.reqHeaderPool.Get().(*binaryRequestHeader)
-	defer b.reqHeaderPool.Put(header)
-	header.Reset()
+	header := b.getReqHeader()
+	defer b.putReqHeader(header)
 
 	header.Opcode = binaryOpcodeFlush
 	if err := header.EncodeTo(b.conn); err != nil {
+		return err
+	}
+	if err := b.conn.Flush(); err != nil {
 		return err
 	}
 
@@ -946,6 +1159,49 @@ func (b *binaryProtocol) Flush() error {
 	}
 
 	return nil
+}
+
+func (b *binaryProtocol) Version() (string, error) {
+	header := b.getReqHeader()
+	defer b.putReqHeader(header)
+
+	header.Opcode = binaryOpcodeVersion
+	if err := header.EncodeTo(b.conn); err != nil {
+		return "", err
+	}
+	if err := b.conn.Flush(); err != nil {
+		return "", err
+	}
+
+	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
+	defer b.resHeaderPool.Put(resHeader)
+	if err := resHeader.Read(b.conn); err != nil {
+		return "", err
+	}
+
+	if resHeader.Status != 0 {
+		if v, ok := binaryStatus[resHeader.Status]; ok {
+			return "", fmt.Errorf("memcached: error %s", v)
+		}
+		return "", fmt.Errorf("memcached: unknown error %d", resHeader.Status)
+	}
+
+	buf := make([]byte, resHeader.TotalBodyLength)
+	if _, err := io.ReadFull(b.conn, buf); err != nil {
+		return "", err
+	}
+
+	return string(buf), nil
+}
+
+func (b *binaryProtocol) getReqHeader() *binaryRequestHeader {
+	h := b.reqHeaderPool.Get().(*binaryRequestHeader)
+	h.Reset()
+	return h
+}
+
+func (b *binaryProtocol) putReqHeader(h *binaryRequestHeader) {
+	b.reqHeaderPool.Put(h)
 }
 
 type binaryRequestHeader struct {
