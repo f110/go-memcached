@@ -188,6 +188,9 @@ func newTextProtocol(ring *Ring) *textProtocol {
 
 func (t *textProtocol) Get(key string) (*Item, error) {
 	s := t.ring.Pick(key)
+	s.Lock()
+	defer s.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "get %s\r\n", key); err != nil {
 		return nil, err
 	}
@@ -246,16 +249,21 @@ func (t *textProtocol) GetMulti(keys ...string) ([]*Item, error) {
 	items := make([]*Item, 0, len(keys))
 	for serverName, keys := range keyMap {
 		s := t.ring.Find(serverName)
+		s.Lock()
 		if _, err := fmt.Fprintf(s.conn, "gets %s\r\n", strings.Join(keys, " ")); err != nil {
+			s.Unlock()
 			return nil, err
 		}
 		if err := s.conn.Flush(); err != nil {
+			s.Unlock()
 			return nil, err
 		}
 		i, err := t.parseGetResponse(s.conn.Reader)
 		if err != nil {
+			s.Unlock()
 			return nil, err
 		}
+		s.Unlock()
 		items = append(items, i...)
 	}
 
@@ -306,6 +314,9 @@ func (t *textProtocol) parseGetResponse(r *bufio.Reader) ([]*Item, error) {
 
 func (t *textProtocol) Delete(key string) error {
 	s := t.ring.Pick(key)
+	s.Lock()
+	defer s.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "delete %s\r\n", key); err != nil {
 		return err
 	}
@@ -336,6 +347,9 @@ func (t *textProtocol) Decr(key string, delta int) (int64, error) {
 
 func (t *textProtocol) incrOrDecr(op, key string, delta int) (int64, error) {
 	s := t.ring.Pick(key)
+	s.Lock()
+	defer s.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "%s %s %d\r\n", op, key, delta); err != nil {
 		return 0, err
 	}
@@ -361,6 +375,9 @@ func (t *textProtocol) incrOrDecr(op, key string, delta int) (int64, error) {
 
 func (t *textProtocol) Touch(key string, expiration int) error {
 	s := t.ring.Pick(key)
+	s.Lock()
+	defer s.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "touch %s %d\r\n", key, expiration); err != nil {
 		return err
 	}
@@ -384,6 +401,9 @@ func (t *textProtocol) Touch(key string, expiration int) error {
 
 func (t *textProtocol) Set(item *Item) error {
 	s := t.ring.Pick(item.Key)
+	s.Lock()
+	defer s.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "set %s %d %d %d\r\n", item.Key, item.Flags, item.Expiration, len(item.Value)); err != nil {
 		return err
 	}
@@ -408,6 +428,9 @@ func (t *textProtocol) Set(item *Item) error {
 
 func (t *textProtocol) Add(item *Item) error {
 	s := t.ring.Pick(item.Key)
+	s.Lock()
+	defer s.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "add %s %d %d %d\r\n", item.Key, item.Flags, item.Expiration, len(item.Value)); err != nil {
 		return err
 	}
@@ -430,6 +453,9 @@ func (t *textProtocol) Add(item *Item) error {
 
 func (t *textProtocol) Replace(item *Item) error {
 	s := t.ring.Pick(item.Key)
+	s.Lock()
+	defer s.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "replace %s %d %d %d\r\n", item.Key, item.Flags, item.Expiration, len(item.Value)); err != nil {
 		return err
 	}
@@ -509,6 +535,9 @@ func newMetaProtocol(ring *Ring) *metaProtocol {
 
 func (m *metaProtocol) Get(key string) (*Item, error) {
 	s := m.ring.Pick(key)
+	s.Lock()
+	defer s.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "mg %s svf\r\n", key); err != nil {
 		return nil, err
 	}
@@ -532,13 +561,16 @@ func (m *metaProtocol) GetMulti(keys ...string) ([]*Item, error) {
 	items := make([]*Item, 0)
 	for serverName, keys := range keyMap {
 		s := m.ring.Find(serverName)
+		s.Lock()
 		for _, key := range keys {
 			if _, err := fmt.Fprintf(s.conn, "mg %s svfk\r\n", key); err != nil {
+				s.Unlock()
 				return nil, err
 			}
 		}
 		s.conn.WriteString("mn\r\n")
 		if err := s.conn.Flush(); err != nil {
+			s.Unlock()
 			return nil, err
 		}
 
@@ -550,11 +582,13 @@ func (m *metaProtocol) GetMulti(keys ...string) ([]*Item, error) {
 				case ItemNotFound:
 					break MultiRead
 				default:
+					s.Unlock()
 					return nil, err
 				}
 			}
 			items = append(items, item)
 		}
+		s.Unlock()
 	}
 
 	return items, nil
@@ -610,6 +644,9 @@ func (m *metaProtocol) parseGetResponse(conn *bufio.ReadWriter, flags string) (*
 
 func (m *metaProtocol) Set(item *Item) error {
 	s := m.ring.Pick(item.Key)
+	s.Lock()
+	defer s.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "ms %s S %d\r\n", item.Key, len(item.Value)); err != nil {
 		return err
 	}
@@ -640,6 +677,9 @@ func (m *metaProtocol) Replace(item *Item) error {
 
 func (m *metaProtocol) Delete(key string) error {
 	s := m.ring.Pick(key)
+	s.Lock()
+	defer s.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "md %s\r\n", key); err != nil {
 		return err
 	}
@@ -673,6 +713,9 @@ func (m *metaProtocol) Decr(key string, delta int) (int64, error) {
 
 func (m *metaProtocol) incrOrDecr(op, key string, delta int) (int64, error) {
 	s := m.ring.Pick(key)
+	s.Lock()
+	defer s.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "%s %s %d\r\n", op, key, delta); err != nil {
 		return 0, err
 	}
@@ -698,6 +741,9 @@ func (m *metaProtocol) incrOrDecr(op, key string, delta int) (int64, error) {
 
 func (m *metaProtocol) Touch(key string, expiration int) error {
 	s := m.ring.Pick(key)
+	s.Lock()
+	defer s.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "md %s IT %d\r\n", key, expiration); err != nil {
 		return err
 	}
@@ -783,6 +829,8 @@ func newBinaryProtocol(ring *Ring) *binaryProtocol {
 
 func (b *binaryProtocol) Get(key string) (*Item, error) {
 	s := b.ring.Pick(key)
+	s.Lock()
+	defer s.Unlock()
 
 	header := b.reqHeaderPool.Get().(*binaryRequestHeader)
 	defer b.reqHeaderPool.Put(header)
@@ -843,6 +891,7 @@ func (b *binaryProtocol) GetMulti(keys ...string) ([]*Item, error) {
 	items := make([]*Item, 0, len(keys))
 	for serverName, keys := range keyMap {
 		s := b.ring.Find(serverName)
+		s.Lock()
 
 		header := b.reqHeaderPool.Get().(*binaryRequestHeader)
 		for _, key := range keys {
@@ -851,6 +900,7 @@ func (b *binaryProtocol) GetMulti(keys ...string) ([]*Item, error) {
 			header.KeyLength = uint16(len(key))
 			header.TotalBodyLength = uint32(len(key))
 			if err := header.EncodeTo(s.conn); err != nil {
+				s.Unlock()
 				return nil, err
 			}
 			s.conn.Write([]byte(key))
@@ -861,16 +911,19 @@ func (b *binaryProtocol) GetMulti(keys ...string) ([]*Item, error) {
 		header.Reset()
 		header.Opcode = binaryOpcodeNoop
 		if err := header.EncodeTo(s.conn); err != nil {
+			s.Unlock()
 			return nil, err
 		}
 		b.reqHeaderPool.Put(header)
 		if err := s.conn.Flush(); err != nil {
+			s.Unlock()
 			return nil, err
 		}
 
 		resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
 		for {
 			if err := resHeader.Read(s.conn); err != nil {
+				s.Unlock()
 				return nil, err
 			}
 			if resHeader.Opcode == binaryOpcodeNoop {
@@ -879,13 +932,16 @@ func (b *binaryProtocol) GetMulti(keys ...string) ([]*Item, error) {
 
 			if resHeader.Status != 0 {
 				if v, ok := binaryStatus[resHeader.Status]; ok {
+					s.Unlock()
 					return nil, fmt.Errorf("memcached: error %s", v)
 				}
+				s.Unlock()
 				return nil, fmt.Errorf("memcached: unknown error %d", resHeader.Status)
 			}
 
 			buf := make([]byte, resHeader.TotalBodyLength)
 			if _, err := io.ReadFull(s.conn, buf); err != nil {
+				s.Unlock()
 				return nil, err
 			}
 
@@ -899,6 +955,7 @@ func (b *binaryProtocol) GetMulti(keys ...string) ([]*Item, error) {
 				Flags: flags,
 			})
 		}
+		s.Unlock()
 	}
 
 	return items, nil
@@ -906,6 +963,8 @@ func (b *binaryProtocol) GetMulti(keys ...string) ([]*Item, error) {
 
 func (b *binaryProtocol) Set(item *Item) error {
 	s := b.ring.Pick(item.Key)
+	s.Lock()
+	defer s.Unlock()
 
 	header := b.getReqHeader()
 	defer b.putReqHeader(header)
@@ -944,6 +1003,8 @@ func (b *binaryProtocol) Set(item *Item) error {
 
 func (b *binaryProtocol) Add(item *Item) error {
 	s := b.ring.Pick(item.Key)
+	s.Lock()
+	defer s.Unlock()
 
 	header := b.getReqHeader()
 	defer b.putReqHeader(header)
@@ -987,6 +1048,9 @@ func (b *binaryProtocol) Add(item *Item) error {
 
 func (b *binaryProtocol) Replace(item *Item) error {
 	s := b.ring.Pick(item.Key)
+	s.Lock()
+	defer s.Unlock()
+
 	header := b.getReqHeader()
 	defer b.putReqHeader(header)
 
@@ -1034,6 +1098,9 @@ func (b *binaryProtocol) Replace(item *Item) error {
 
 func (b *binaryProtocol) Delete(key string) error {
 	s := b.ring.Pick(key)
+	s.Lock()
+	defer s.Unlock()
+
 	header := b.reqHeaderPool.Get().(*binaryRequestHeader)
 	defer b.reqHeaderPool.Put(header)
 	header.Reset()
@@ -1089,6 +1156,9 @@ func (b *binaryProtocol) Decr(key string, delta int) (int64, error) {
 
 func (b *binaryProtocol) incrOrDecr(opcode byte, key string, delta int) (int64, error) {
 	s := b.ring.Pick(key)
+	s.Lock()
+	defer s.Unlock()
+
 	extra := make([]byte, 20)
 	binary.BigEndian.PutUint64(extra[:8], uint64(delta))
 	binary.BigEndian.PutUint64(extra[8:16], 1)
@@ -1146,6 +1216,9 @@ func (b *binaryProtocol) incrOrDecr(opcode byte, key string, delta int) (int64, 
 
 func (b *binaryProtocol) Touch(key string, expiration int) error {
 	s := b.ring.Pick(key)
+	s.Lock()
+	defer s.Unlock()
+
 	extra := make([]byte, 4)
 	binary.BigEndian.PutUint32(extra, uint32(expiration))
 	header := b.reqHeaderPool.Get().(*binaryRequestHeader)

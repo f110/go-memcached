@@ -9,18 +9,29 @@ import (
 	"net"
 	"sort"
 	"strconv"
+	"sync"
 )
 
 const (
 	numberOfDivideServer = 200
 )
 
+const (
+	ServerDeleteOnly ServerOperationType = "delete_only"
+	ServerWriteOnly  ServerOperationType = "write_only"
+)
+
+type ServerOperationType string
+
 type Server struct {
 	Name    string
 	Network string
 	Addr    string
+	Type    ServerOperationType
 
 	conn *bufio.ReadWriter
+	raw  net.Conn
+	mu   sync.Mutex
 }
 
 func NewServer(ctx context.Context, name, network, addr string) (*Server, error) {
@@ -35,7 +46,20 @@ func NewServer(ctx context.Context, name, network, addr string) (*Server, error)
 		Network: network,
 		Addr:    addr,
 		conn:    bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
+		raw:     conn,
 	}, nil
+}
+
+func (s *Server) Lock() {
+	s.mu.Lock()
+}
+
+func (s *Server) Unlock() {
+	s.mu.Unlock()
+}
+
+func (s *Server) Close() error {
+	return s.raw.Close()
 }
 
 type Node struct {
@@ -104,9 +128,12 @@ func (r *Ring) Find(name string) *Server {
 
 func (r *Ring) Each(fn func(s *Server) error) error {
 	for _, s := range r.servers {
+		s.Lock()
 		if err := fn(s); err != nil {
+			s.Unlock()
 			return err
 		}
+		s.Unlock()
 	}
 
 	return nil
