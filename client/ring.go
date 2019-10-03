@@ -138,3 +138,14 @@ func (r *Ring) Each(fn func(s *Server) error) error {
 
 	return nil
 }
+
+func (r *Ring) Close() error {
+	var e error
+	for _, v := range r.servers {
+		if err := v.Close(); err != nil {
+			e = err
+		}
+	}
+
+	return e
+}

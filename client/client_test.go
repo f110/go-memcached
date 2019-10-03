@@ -41,6 +41,12 @@ func newBinaryProtocolClient(t *testing.T) *Client {
 
 func TestClient_Get(t *testing.T) {
 	testFn := func(t *testing.T, c *Client) {
+		defer func() {
+			if err := c.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}()
+
 		if err := c.Set(&Item{Key: t.Name(), Value: []byte("FOOBAR")}); err != nil {
 			t.Fatal(err)
 		}
@@ -68,6 +74,12 @@ func TestClient_Get(t *testing.T) {
 
 func TestClient_Set(t *testing.T) {
 	testFn := func(t *testing.T, c *Client) {
+		defer func() {
+			if err := c.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}()
+
 		if err := c.Set(&Item{Key: t.Name(), Value: []byte("hoge")}); err != nil {
 			t.Fatal(err)
 		}
@@ -95,6 +107,12 @@ func TestClient_Set(t *testing.T) {
 
 func TestClient_Add(t *testing.T) {
 	testFn := func(t *testing.T, c *Client) {
+		defer func() {
+			if err := c.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}()
+
 		if err := c.Delete(t.Name()); err != nil && err != ItemNotFound {
 			t.Fatal(err)
 		}
@@ -126,6 +144,12 @@ func TestClient_Add(t *testing.T) {
 
 func TestClient_Replace(t *testing.T) {
 	testFn := func(t *testing.T, c *Client) {
+		defer func() {
+			if err := c.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}()
+
 		if err := c.Delete(t.Name()); err != nil && err != ItemNotFound {
 			t.Fatal(err)
 		}
@@ -169,6 +193,12 @@ func TestClient_Replace(t *testing.T) {
 
 func TestClient_GetMulti(t *testing.T) {
 	testFn := func(t *testing.T, c *Client) {
+		defer func() {
+			if err := c.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}()
+
 		if err := c.Set(&Item{Key: "test", Value: []byte("OK1")}); err != nil {
 			t.Fatal(err)
 		}
@@ -204,6 +234,12 @@ func TestClient_GetMulti(t *testing.T) {
 
 func TestClient_Delete(t *testing.T) {
 	testFn := func(t *testing.T, c *Client) {
+		defer func() {
+			if err := c.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}()
+
 		if err := c.Set(&Item{Key: t.Name(), Value: []byte("YES")}); err != nil {
 			t.Fatal(err)
 		}
@@ -233,6 +269,12 @@ func TestClient_Delete(t *testing.T) {
 
 func TestClient_Touch(t *testing.T) {
 	testFn := func(t *testing.T, c *Client) {
+		defer func() {
+			if err := c.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}()
+
 		if err := c.Set(&Item{Key: t.Name(), Value: []byte("OK"), Expiration: 10}); err != nil {
 			t.Fatal(err)
 		}
@@ -284,6 +326,12 @@ func TestClient_Increment(t *testing.T) {
 
 func TestClient_Decrement(t *testing.T) {
 	testFn := func(t *testing.T, c *Client) {
+		defer func() {
+			if err := c.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}()
+
 		if err := c.Set(&Item{Key: t.Name(), Value: []byte("10")}); err != nil {
 			t.Fatal()
 		}
@@ -312,6 +360,12 @@ func TestClient_Decrement(t *testing.T) {
 
 func TestClient_Version(t *testing.T) {
 	testFn := func(t *testing.T, c *Client) {
+		defer func() {
+			if err := c.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}()
+
 		v, err := c.Version()
 		if err != nil {
 			t.Fatal(err)
@@ -337,6 +391,12 @@ func TestClient_Version(t *testing.T) {
 
 func Benchmark_Get(b *testing.B) {
 	benchFn := func(b *testing.B, c *Client) {
+		defer func() {
+			if err := c.Close(); err != nil {
+				b.Fatal(err)
+			}
+		}()
+
 		if err := c.Set(&Item{Key: "bench", Value: []byte("OK")}); err != nil {
 			b.Fatal(err)
 		}

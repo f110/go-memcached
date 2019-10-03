@@ -107,6 +107,7 @@ type engine interface {
 	Touch(key string, expiration int) error
 	Flush() error
 	Version() (map[string]string, error)
+	Close() error
 }
 
 type Client struct {
@@ -174,6 +175,10 @@ func (c *Client) Flush() error {
 
 func (c *Client) Version() (map[string]string, error) {
 	return c.protocol.Version()
+}
+
+func (c *Client) Close() error {
+	return c.protocol.Close()
 }
 
 type textProtocol struct {
@@ -523,6 +528,10 @@ func (t *textProtocol) Version() (map[string]string, error) {
 	return result, err
 }
 
+func (t *textProtocol) Close() error {
+	return t.ring.Close()
+}
+
 type metaProtocol struct {
 	ring *Ring
 }
@@ -804,6 +813,10 @@ func (m *metaProtocol) Version() (map[string]string, error) {
 	})
 
 	return result, err
+}
+
+func (m *metaProtocol) Close() error {
+	return m.ring.Close()
 }
 
 type binaryProtocol struct {
@@ -1320,6 +1333,10 @@ func (b *binaryProtocol) Version() (map[string]string, error) {
 	})
 
 	return result, err
+}
+
+func (b *binaryProtocol) Close() error {
+	return b.ring.Close()
 }
 
 func (b *binaryProtocol) getReqHeader() *binaryRequestHeader {
