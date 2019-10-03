@@ -3,49 +3,66 @@ package client
 import (
 	"bytes"
 	"context"
+	"flag"
 	"log"
 	"testing"
 )
 
+var memcachedHost = "localhost:11211"
+
+func init() {
+	flag.StringVar(&memcachedHost, "memcached-host", memcachedHost, "memcached host")
+}
+
+func newClient(t *testing.T, protocol string) *Client {
+	server, err := NewServer(context.Background(), "test", "tcp", memcachedHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := NewClient(context.Background(), protocol, server)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return c
+}
+
+func newTextProtocolClient(t *testing.T) *Client {
+	return newClient(t, ProtocolText)
+}
+
+func newMetaProtocolClient(t *testing.T) *Client {
+	return newClient(t, ProtocolMeta)
+}
+
+func newBinaryProtocolClient(t *testing.T) *Client {
+	return newClient(t, ProtocolBinary)
+}
+
 func TestClient_Get(t *testing.T) {
 	testFn := func(t *testing.T, c *Client) {
-		if err := c.Set(&Item{Key: t.Name(), Value: []byte("OK")}); err != nil {
+		if err := c.Set(&Item{Key: t.Name(), Value: []byte("FOOBAR")}); err != nil {
 			t.Fatal(err)
 		}
 		item, err := c.Get(t.Name())
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(item.Value, []byte("OK")) {
+		if !bytes.Equal(item.Value, []byte("FOOBAR")) {
 			t.Errorf("unexpected value: %v", item.Value)
 		}
 	}
 
 	t.Run("TextProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11211", ProtocolText)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newTextProtocolClient(t))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11212", ProtocolMeta)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newMetaProtocolClient(t))
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11211", ProtocolBinary)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newBinaryProtocolClient(t))
 	})
 }
 
@@ -64,30 +81,15 @@ func TestClient_Set(t *testing.T) {
 	}
 
 	t.Run("TextProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11211", ProtocolText)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newTextProtocolClient(t))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11212", ProtocolMeta)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newMetaProtocolClient(t))
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11211", ProtocolBinary)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newBinaryProtocolClient(t))
 	})
 }
 
@@ -109,31 +111,16 @@ func TestClient_Add(t *testing.T) {
 	}
 
 	t.Run("TextProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11211", ProtocolText)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newTextProtocolClient(t))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
 		t.Skip("Not yet supported by meta command")
-		c, err := NewClient(context.Background(), "localhost:11212", ProtocolMeta)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newMetaProtocolClient(t))
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11211", ProtocolBinary)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newBinaryProtocolClient(t))
 	})
 }
 
@@ -167,31 +154,16 @@ func TestClient_Replace(t *testing.T) {
 	}
 
 	t.Run("TextProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11211", ProtocolText)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newTextProtocolClient(t))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
 		t.Skip("Not yet supported by meta command")
-		c, err := NewClient(context.Background(), "localhost:11212", ProtocolMeta)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newMetaProtocolClient(t))
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11211", ProtocolBinary)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newBinaryProtocolClient(t))
 	})
 }
 
@@ -218,30 +190,15 @@ func TestClient_GetMulti(t *testing.T) {
 	}
 
 	t.Run("TextProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11211", ProtocolText)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newTextProtocolClient(t))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11212", ProtocolMeta)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newMetaProtocolClient(t))
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11211", ProtocolBinary)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newBinaryProtocolClient(t))
 	})
 }
 
@@ -262,30 +219,15 @@ func TestClient_Delete(t *testing.T) {
 	}
 
 	t.Run("TextProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11211", ProtocolText)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newTextProtocolClient(t))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11212", ProtocolMeta)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newMetaProtocolClient(t))
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11211", ProtocolBinary)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newBinaryProtocolClient(t))
 	})
 }
 
@@ -300,21 +242,15 @@ func TestClient_Touch(t *testing.T) {
 	}
 
 	t.Run("TextProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11211", ProtocolText)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newTextProtocolClient(t))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11212", ProtocolMeta)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testFn(t, newMetaProtocolClient(t))
+	})
 
-		testFn(t, c)
+	t.Run("BinaryProtocol", func(t *testing.T) {
+		testFn(t, newBinaryProtocolClient(t))
 	})
 }
 
@@ -333,13 +269,16 @@ func TestClient_Increment(t *testing.T) {
 		}
 	}
 
-	t.Run("BinaryProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11211", ProtocolBinary)
-		if err != nil {
-			t.Fatal(err)
-		}
+	t.Run("TextProtocol", func(t *testing.T) {
+		testFn(t, newTextProtocolClient(t))
+	})
 
-		testFn(t, c)
+	t.Run("MetaProtocol", func(t *testing.T) {
+		testFn(t, newMetaProtocolClient(t))
+	})
+
+	t.Run("BinaryProtocol", func(t *testing.T) {
+		testFn(t, newBinaryProtocolClient(t))
 	})
 }
 
@@ -358,13 +297,16 @@ func TestClient_Decrement(t *testing.T) {
 		}
 	}
 
-	t.Run("BinaryProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11211", ProtocolBinary)
-		if err != nil {
-			t.Fatal(err)
-		}
+	t.Run("TextProtocol", func(t *testing.T) {
+		testFn(t, newTextProtocolClient(t))
+	})
 
-		testFn(t, c)
+	t.Run("MetaProtocol", func(t *testing.T) {
+		testFn(t, newMetaProtocolClient(t))
+	})
+
+	t.Run("BinaryProtocol", func(t *testing.T) {
+		testFn(t, newBinaryProtocolClient(t))
 	})
 }
 
@@ -375,36 +317,21 @@ func TestClient_Version(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if v == "" {
+		if v["test"] == "" {
 			t.Error("returning empty value")
 		}
 	}
 
 	t.Run("TextProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11211", ProtocolText)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newTextProtocolClient(t))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11211", ProtocolMeta)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newMetaProtocolClient(t))
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		c, err := NewClient(context.Background(), "localhost:11211", ProtocolBinary)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		testFn(t, c)
+		testFn(t, newBinaryProtocolClient(t))
 	})
 }
 
@@ -422,7 +349,11 @@ func Benchmark_Get(b *testing.B) {
 	}
 
 	b.Run("TextProtocol", func(b *testing.B) {
-		c, err := NewClient(context.Background(), "localhost:11211", ProtocolText)
+		server, err := NewServer(context.Background(), "test", "tcp", memcachedHost)
+		if err != nil {
+			b.Fatal(err)
+		}
+		c, err := NewClient(context.Background(), ProtocolText, server)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -431,7 +362,24 @@ func Benchmark_Get(b *testing.B) {
 	})
 
 	b.Run("MetaProtocol", func(b *testing.B) {
-		c, err := NewClient(context.Background(), "localhost:11212", ProtocolMeta)
+		server, err := NewServer(context.Background(), "test", "tcp", memcachedHost)
+		if err != nil {
+			b.Fatal(err)
+		}
+		c, err := NewClient(context.Background(), ProtocolMeta, server)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		benchFn(b, c)
+	})
+
+	b.Run("BinaryProtocol", func(b *testing.B) {
+		server, err := NewServer(context.Background(), "test", "tcp", memcachedHost)
+		if err != nil {
+			b.Fatal(err)
+		}
+		c, err := NewClient(context.Background(), ProtocolBinary, server)
 		if err != nil {
 			b.Fatal(err)
 		}

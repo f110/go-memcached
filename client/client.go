@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -87,6 +86,15 @@ type Item struct {
 	Cas        int
 }
 
+func (i *Item) marshalBinaryRequestHeader(h *binaryRequestHeader) []byte {
+	extra := make([]byte, 8)
+	binary.BigEndian.PutUint32(extra[4:8], uint32(i.Expiration))
+	h.KeyLength = uint16(len(i.Key))
+	h.ExtraLength = uint8(len(extra))
+	h.TotalBodyLength = uint32(len(i.Key) + len(i.Value) + len(extra))
+	return extra
+}
+
 type engine interface {
 	Get(key string) (*Item, error)
 	GetMulti(keys ...string) ([]*Item, error)
@@ -98,36 +106,27 @@ type engine interface {
 	Decr(key string, delta int) (int64, error)
 	Touch(key string, expiration int) error
 	Flush() error
-	Version() (string, error)
+	Version() (map[string]string, error)
 }
 
 type Client struct {
 	protocol engine
 }
 
-func NewClient(ctx context.Context, server, protocol string) (*Client, error) {
+func NewClient(ctx context.Context, protocol string, servers ...*Server) (*Client, error) {
 	var e engine
+
+	ring := NewRing(servers...)
 
 	switch protocol {
 	case ProtocolText:
-		engine, err := newTextProtocol(ctx, server)
-		if err != nil {
-			return nil, err
-		}
-		e = engine
+		e = newTextProtocol(ring)
 	case ProtocolMeta:
-		engine, err := newMetaProtocol(ctx, server)
-		if err != nil {
-			return nil, err
-		}
-		e = engine
+		e = newMetaProtocol(ring)
 	case ProtocolBinary:
-		engine, err := newBinaryProtocol(ctx, server)
-		if err != nil {
-			return nil, err
-		}
-		e = engine
+		e = newBinaryProtocol(ring)
 	}
+
 	return &Client{
 		protocol: e,
 	}, nil
@@ -173,34 +172,29 @@ func (c *Client) Flush() error {
 	return c.protocol.Flush()
 }
 
-func (c *Client) Version() (string, error) {
+func (c *Client) Version() (map[string]string, error) {
 	return c.protocol.Version()
 }
 
 type textProtocol struct {
-	server string
-	conn   *bufio.ReadWriter
+	ring *Ring
 }
 
 var _ engine = &textProtocol{}
 
-func newTextProtocol(ctx context.Context, server string) (*textProtocol, error) {
-	d := &net.Dialer{}
-	conn, err := d.DialContext(ctx, "tcp", server)
-	if err != nil {
-		return nil, err
-	}
-	return &textProtocol{conn: bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))}, nil
+func newTextProtocol(ring *Ring) *textProtocol {
+	return &textProtocol{ring: ring}
 }
 
 func (t *textProtocol) Get(key string) (*Item, error) {
-	if _, err := fmt.Fprintf(t.conn, "get %s\r\n", key); err != nil {
+	s := t.ring.Pick(key)
+	if _, err := fmt.Fprintf(s.conn, "get %s\r\n", key); err != nil {
 		return nil, err
 	}
-	if err := t.conn.Flush(); err != nil {
+	if err := s.conn.Flush(); err != nil {
 		return nil, err
 	}
-	b, err := t.conn.ReadSlice('\n')
+	b, err := s.conn.ReadSlice('\n')
 	if err != nil {
 		return nil, err
 	}
@@ -223,12 +217,12 @@ func (t *textProtocol) Get(key string) (*Item, error) {
 	}
 	buf := make([]byte, size+2)
 
-	if _, err := io.ReadFull(t.conn, buf); err != nil {
+	if _, err := io.ReadFull(s.conn, buf); err != nil {
 		return nil, err
 	}
 	item.Value = buf[:size]
 
-	b, err = t.conn.ReadSlice('\n')
+	b, err = s.conn.ReadSlice('\n')
 	if err != nil {
 		return nil, err
 	}
@@ -240,13 +234,32 @@ func (t *textProtocol) Get(key string) (*Item, error) {
 }
 
 func (t *textProtocol) GetMulti(keys ...string) ([]*Item, error) {
-	if _, err := fmt.Fprintf(t.conn, "gets %s\r\n", strings.Join(keys, " ")); err != nil {
-		return nil, err
+	keyMap := make(map[string][]string)
+	for _, key := range keys {
+		s := t.ring.Pick(key)
+		if _, ok := keyMap[s.Name]; !ok {
+			keyMap[s.Name] = make([]string, 0)
+		}
+		keyMap[s.Name] = append(keyMap[s.Name], key)
 	}
-	if err := t.conn.Flush(); err != nil {
-		return nil, err
+
+	items := make([]*Item, 0, len(keys))
+	for serverName, keys := range keyMap {
+		s := t.ring.Find(serverName)
+		if _, err := fmt.Fprintf(s.conn, "gets %s\r\n", strings.Join(keys, " ")); err != nil {
+			return nil, err
+		}
+		if err := s.conn.Flush(); err != nil {
+			return nil, err
+		}
+		i, err := t.parseGetResponse(s.conn.Reader)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, i...)
 	}
-	return t.parseGetResponse(t.conn.Reader)
+
+	return items, nil
 }
 
 func (t *textProtocol) parseGetResponse(r *bufio.Reader) ([]*Item, error) {
@@ -292,13 +305,14 @@ func (t *textProtocol) parseGetResponse(r *bufio.Reader) ([]*Item, error) {
 }
 
 func (t *textProtocol) Delete(key string) error {
-	if _, err := fmt.Fprintf(t.conn, "delete %s\r\n", key); err != nil {
+	s := t.ring.Pick(key)
+	if _, err := fmt.Fprintf(s.conn, "delete %s\r\n", key); err != nil {
 		return err
 	}
-	if err := t.conn.Flush(); err != nil {
+	if err := s.conn.Flush(); err != nil {
 		return err
 	}
-	b, err := t.conn.ReadSlice('\n')
+	b, err := s.conn.ReadSlice('\n')
 	if err != nil {
 		return err
 	}
@@ -321,14 +335,14 @@ func (t *textProtocol) Decr(key string, delta int) (int64, error) {
 }
 
 func (t *textProtocol) incrOrDecr(op, key string, delta int) (int64, error) {
-	if _, err := fmt.Fprintf(t.conn, "%s %s %d\r\n", op, key, delta); err != nil {
+	s := t.ring.Pick(key)
+	if _, err := fmt.Fprintf(s.conn, "%s %s %d\r\n", op, key, delta); err != nil {
 		return 0, err
 	}
-	if err := t.conn.Flush(); err != nil {
+	if err := s.conn.Flush(); err != nil {
 		return 0, err
 	}
-	r := bufio.NewReader(t.conn)
-	b, err := r.ReadSlice('\n')
+	b, err := s.conn.ReadSlice('\n')
 	if err != nil {
 		return 0, err
 	}
@@ -346,13 +360,14 @@ func (t *textProtocol) incrOrDecr(op, key string, delta int) (int64, error) {
 }
 
 func (t *textProtocol) Touch(key string, expiration int) error {
-	if _, err := fmt.Fprintf(t.conn, "touch %s %d\r\n", key, expiration); err != nil {
+	s := t.ring.Pick(key)
+	if _, err := fmt.Fprintf(s.conn, "touch %s %d\r\n", key, expiration); err != nil {
 		return err
 	}
-	if err := t.conn.Flush(); err != nil {
+	if err := s.conn.Flush(); err != nil {
 		return err
 	}
-	b, err := t.conn.ReadSlice('\n')
+	b, err := s.conn.ReadSlice('\n')
 	if err != nil {
 		return err
 	}
@@ -368,16 +383,17 @@ func (t *textProtocol) Touch(key string, expiration int) error {
 }
 
 func (t *textProtocol) Set(item *Item) error {
-	if _, err := fmt.Fprintf(t.conn, "set %s %d %d %d\r\n", item.Key, item.Flags, item.Expiration, len(item.Value)); err != nil {
+	s := t.ring.Pick(item.Key)
+	if _, err := fmt.Fprintf(s.conn, "set %s %d %d %d\r\n", item.Key, item.Flags, item.Expiration, len(item.Value)); err != nil {
 		return err
 	}
-	if _, err := t.conn.Write(append(item.Value, crlf...)); err != nil {
+	if _, err := s.conn.Write(append(item.Value, crlf...)); err != nil {
 		return err
 	}
-	if err := t.conn.Flush(); err != nil {
+	if err := s.conn.Flush(); err != nil {
 		return err
 	}
-	buf, err := t.conn.ReadSlice('\n')
+	buf, err := s.conn.ReadSlice('\n')
 	if err != nil {
 		return err
 	}
@@ -391,16 +407,17 @@ func (t *textProtocol) Set(item *Item) error {
 }
 
 func (t *textProtocol) Add(item *Item) error {
-	if _, err := fmt.Fprintf(t.conn, "add %s %d %d %d\r\n", item.Key, item.Flags, item.Expiration, len(item.Value)); err != nil {
+	s := t.ring.Pick(item.Key)
+	if _, err := fmt.Fprintf(s.conn, "add %s %d %d %d\r\n", item.Key, item.Flags, item.Expiration, len(item.Value)); err != nil {
 		return err
 	}
-	t.conn.Write(item.Value)
-	t.conn.Write(crlf)
-	if err := t.conn.Flush(); err != nil {
+	s.conn.Write(item.Value)
+	s.conn.Write(crlf)
+	if err := s.conn.Flush(); err != nil {
 		return err
 	}
 
-	b, err := t.conn.ReadSlice('\n')
+	b, err := s.conn.ReadSlice('\n')
 	if err != nil {
 		return err
 	}
@@ -412,16 +429,17 @@ func (t *textProtocol) Add(item *Item) error {
 }
 
 func (t *textProtocol) Replace(item *Item) error {
-	if _, err := fmt.Fprintf(t.conn, "replace %s %d %d %d\r\n", item.Key, item.Flags, item.Expiration, len(item.Value)); err != nil {
+	s := t.ring.Pick(item.Key)
+	if _, err := fmt.Fprintf(s.conn, "replace %s %d %d %d\r\n", item.Key, item.Flags, item.Expiration, len(item.Value)); err != nil {
 		return err
 	}
-	t.conn.Write(item.Value)
-	t.conn.Write(crlf)
-	if err := t.conn.Flush(); err != nil {
+	s.conn.Write(item.Value)
+	s.conn.Write(crlf)
+	if err := s.conn.Flush(); err != nil {
 		return err
 	}
 
-	b, err := t.conn.ReadSlice('\n')
+	b, err := s.conn.ReadSlice('\n')
 	if err != nil {
 		return err
 	}
@@ -433,102 +451,117 @@ func (t *textProtocol) Replace(item *Item) error {
 }
 
 func (t *textProtocol) Flush() error {
-	if _, err := fmt.Fprint(t.conn, "flush_all"); err != nil {
-		return err
-	}
-	if err := t.conn.Flush(); err != nil {
-		return err
-	}
-	b, err := t.conn.ReadSlice('\n')
-	if err != nil {
-		return err
-	}
+	return t.ring.Each(func(s *Server) error {
+		if _, err := fmt.Fprint(s.conn, "flush_all"); err != nil {
+			return err
+		}
+		if err := s.conn.Flush(); err != nil {
+			return err
+		}
+		b, err := s.conn.ReadSlice('\n')
+		if err != nil {
+			return err
+		}
 
-	switch {
-	case bytes.Equal(b, msgTextProtoOk):
-		return nil
-	default:
-		return fmt.Errorf("memcached: %s", string(b[:len(b)-2]))
-	}
+		switch {
+		case bytes.Equal(b, msgTextProtoOk):
+			return nil
+		default:
+			return fmt.Errorf("memcached: %s", string(b[:len(b)-2]))
+		}
+	})
 }
 
-func (t *textProtocol) Version() (string, error) {
-	if _, err := t.conn.WriteString("version\r\n"); err != nil {
-		return "", err
-	}
-	if err := t.conn.Flush(); err != nil {
-		return "", err
-	}
+func (t *textProtocol) Version() (map[string]string, error) {
+	result := make(map[string]string)
 
-	b, err := t.conn.ReadSlice('\n')
-	if err != nil {
-		return "", err
-	}
+	err := t.ring.Each(func(s *Server) error {
+		if _, err := s.conn.WriteString("version\r\n"); err != nil {
+			return err
+		}
+		if err := s.conn.Flush(); err != nil {
+			return err
+		}
 
-	if len(b) > 0 {
-		return strings.TrimPrefix(string(b), "VERSION "), nil
-	}
-	return "", nil
+		b, err := s.conn.ReadSlice('\n')
+		if err != nil {
+			return err
+		}
+
+		if len(b) > 0 {
+			result[s.Name] = strings.TrimPrefix(string(b), "VERSION ")
+		}
+		return nil
+	})
+
+	return result, err
 }
 
 type metaProtocol struct {
-	server string
-	conn   *bufio.ReadWriter
+	ring *Ring
 }
 
 var _ engine = &metaProtocol{}
 
-func newMetaProtocol(ctx context.Context, server string) (*metaProtocol, error) {
-	d := &net.Dialer{}
-	conn, err := d.DialContext(ctx, "tcp", server)
-	if err != nil {
-		return nil, err
-	}
-	return &metaProtocol{conn: bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))}, nil
+func newMetaProtocol(ring *Ring) *metaProtocol {
+	return &metaProtocol{ring: ring}
 }
 
 func (m *metaProtocol) Get(key string) (*Item, error) {
-	if _, err := fmt.Fprintf(m.conn, "mg %s svf\r\n", key); err != nil {
+	s := m.ring.Pick(key)
+	if _, err := fmt.Fprintf(s.conn, "mg %s svf\r\n", key); err != nil {
 		return nil, err
 	}
-	if err := m.conn.Flush(); err != nil {
+	if err := s.conn.Flush(); err != nil {
 		return nil, err
 	}
 
-	return m.parseGetResponse("svf")
+	return m.parseGetResponse(s.conn, "svf")
 }
 
 func (m *metaProtocol) GetMulti(keys ...string) ([]*Item, error) {
+	keyMap := make(map[string][]string)
 	for _, key := range keys {
-		if _, err := fmt.Fprintf(m.conn, "mg %s svfk\r\n", key); err != nil {
-			return nil, err
+		s := m.ring.Pick(key)
+		if _, ok := keyMap[s.Name]; !ok {
+			keyMap[s.Name] = make([]string, 0)
 		}
-	}
-	m.conn.WriteString("mn\r\n")
-	if err := m.conn.Flush(); err != nil {
-		return nil, err
+		keyMap[s.Name] = append(keyMap[s.Name], key)
 	}
 
 	items := make([]*Item, 0)
-MultiRead:
-	for {
-		item, err := m.parseGetResponse("svfk")
-		if err != nil {
-			switch err {
-			case ItemNotFound:
-				break MultiRead
-			default:
+	for serverName, keys := range keyMap {
+		s := m.ring.Find(serverName)
+		for _, key := range keys {
+			if _, err := fmt.Fprintf(s.conn, "mg %s svfk\r\n", key); err != nil {
 				return nil, err
 			}
 		}
-		items = append(items, item)
+		s.conn.WriteString("mn\r\n")
+		if err := s.conn.Flush(); err != nil {
+			return nil, err
+		}
+
+	MultiRead:
+		for {
+			item, err := m.parseGetResponse(s.conn, "svfk")
+			if err != nil {
+				switch err {
+				case ItemNotFound:
+					break MultiRead
+				default:
+					return nil, err
+				}
+			}
+			items = append(items, item)
+		}
 	}
 
 	return items, nil
 }
 
-func (m *metaProtocol) parseGetResponse(flags string) (*Item, error) {
-	b, err := m.conn.ReadSlice('\n')
+func (m *metaProtocol) parseGetResponse(conn *bufio.ReadWriter, flags string) (*Item, error) {
+	b, err := conn.ReadSlice('\n')
 	if err != nil {
 		return nil, err
 	}
@@ -559,12 +592,12 @@ func (m *metaProtocol) parseGetResponse(flags string) (*Item, error) {
 		return nil, err
 	}
 	buf := make([]byte, size+2)
-	if _, err := io.ReadFull(m.conn, buf); err != nil {
+	if _, err := io.ReadFull(conn, buf); err != nil {
 		return nil, err
 	}
 	item.Value = buf[:size]
 
-	b, err = m.conn.ReadSlice('\n')
+	b, err = conn.ReadSlice('\n')
 	if err != nil {
 		return nil, err
 	}
@@ -576,16 +609,17 @@ func (m *metaProtocol) parseGetResponse(flags string) (*Item, error) {
 }
 
 func (m *metaProtocol) Set(item *Item) error {
-	if _, err := fmt.Fprintf(m.conn, "ms %s S %d\r\n", item.Key, len(item.Value)); err != nil {
+	s := m.ring.Pick(item.Key)
+	if _, err := fmt.Fprintf(s.conn, "ms %s S %d\r\n", item.Key, len(item.Value)); err != nil {
 		return err
 	}
-	if _, err := m.conn.Write(append(item.Value, crlf...)); err != nil {
+	if _, err := s.conn.Write(append(item.Value, crlf...)); err != nil {
 		return err
 	}
-	if err := m.conn.Flush(); err != nil {
+	if err := s.conn.Flush(); err != nil {
 		return err
 	}
-	b, err := m.conn.ReadSlice('\n')
+	b, err := s.conn.ReadSlice('\n')
 	if err != nil {
 		return err
 	}
@@ -605,13 +639,14 @@ func (m *metaProtocol) Replace(item *Item) error {
 }
 
 func (m *metaProtocol) Delete(key string) error {
-	if _, err := fmt.Fprintf(m.conn, "md %s\r\n", key); err != nil {
+	s := m.ring.Pick(key)
+	if _, err := fmt.Fprintf(s.conn, "md %s\r\n", key); err != nil {
 		return err
 	}
-	if err := m.conn.Flush(); err != nil {
+	if err := s.conn.Flush(); err != nil {
 		return err
 	}
-	b, err := m.conn.ReadSlice('\n')
+	b, err := s.conn.ReadSlice('\n')
 	if err != nil {
 		return err
 	}
@@ -637,13 +672,14 @@ func (m *metaProtocol) Decr(key string, delta int) (int64, error) {
 }
 
 func (m *metaProtocol) incrOrDecr(op, key string, delta int) (int64, error) {
-	if _, err := fmt.Fprintf(m.conn, "%s %s %d\r\n", op, key, delta); err != nil {
+	s := m.ring.Pick(key)
+	if _, err := fmt.Fprintf(s.conn, "%s %s %d\r\n", op, key, delta); err != nil {
 		return 0, err
 	}
-	if err := m.conn.Flush(); err != nil {
+	if err := s.conn.Flush(); err != nil {
 		return 0, err
 	}
-	b, err := m.conn.ReadSlice('\n')
+	b, err := s.conn.ReadSlice('\n')
 	if err != nil {
 		return 0, err
 	}
@@ -661,14 +697,15 @@ func (m *metaProtocol) incrOrDecr(op, key string, delta int) (int64, error) {
 }
 
 func (m *metaProtocol) Touch(key string, expiration int) error {
-	if _, err := fmt.Fprintf(m.conn, "md %s IT %d\r\n", key, expiration); err != nil {
+	s := m.ring.Pick(key)
+	if _, err := fmt.Fprintf(s.conn, "md %s IT %d\r\n", key, expiration); err != nil {
 		return err
 	}
-	if err := m.conn.Flush(); err != nil {
+	if err := s.conn.Flush(); err != nil {
 		return err
 	}
 
-	b, err := m.conn.ReadSlice('\n')
+	b, err := s.conn.ReadSlice('\n')
 	if err != nil {
 		return err
 	}
@@ -682,43 +719,49 @@ func (m *metaProtocol) Touch(key string, expiration int) error {
 }
 
 func (m *metaProtocol) Flush() error {
-	if _, err := fmt.Fprint(m.conn, "flush_all"); err != nil {
-		return err
-	}
-	b, err := m.conn.ReadSlice('\n')
-	if err != nil {
-		return err
-	}
+	return m.ring.Each(func(s *Server) error {
+		if _, err := fmt.Fprint(s.conn, "flush_all"); err != nil {
+			return err
+		}
+		b, err := s.conn.ReadSlice('\n')
+		if err != nil {
+			return err
+		}
 
-	switch {
-	case bytes.Equal(b, msgTextProtoOk):
-		return nil
-	default:
-		return fmt.Errorf("memcached: %s", string(b[:len(b)-2]))
-	}
+		switch {
+		case bytes.Equal(b, msgTextProtoOk):
+			return nil
+		default:
+			return fmt.Errorf("memcached: %s", string(b[:len(b)-2]))
+		}
+	})
 }
 
-func (m *metaProtocol) Version() (string, error) {
-	if _, err := m.conn.WriteString("version\r\n"); err != nil {
-		return "", err
-	}
-	if err := m.conn.Flush(); err != nil {
-		return "", err
-	}
+func (m *metaProtocol) Version() (map[string]string, error) {
+	result := make(map[string]string)
+	err := m.ring.Each(func(s *Server) error {
+		if _, err := s.conn.WriteString("version\r\n"); err != nil {
+			return err
+		}
+		if err := s.conn.Flush(); err != nil {
+			return err
+		}
 
-	b, err := m.conn.ReadSlice('\n')
-	if err != nil {
-		return "", err
-	}
-	if len(b) > 0 {
-		return strings.TrimPrefix(string(b), "VERSION "), nil
-	}
-	return "", nil
+		b, err := s.conn.ReadSlice('\n')
+		if err != nil {
+			return err
+		}
+		if len(b) > 0 {
+			result[s.Name] = strings.TrimPrefix(string(b), "VERSION ")
+		}
+		return nil
+	})
+
+	return result, err
 }
 
 type binaryProtocol struct {
-	server string
-	conn   *bufio.ReadWriter
+	ring *Ring
 
 	reqHeaderPool *sync.Pool
 	resHeaderPool *sync.Pool
@@ -726,24 +769,21 @@ type binaryProtocol struct {
 
 var _ engine = &binaryProtocol{}
 
-func newBinaryProtocol(ctx context.Context, server string) (*binaryProtocol, error) {
-	d := &net.Dialer{}
-	conn, err := d.DialContext(ctx, "tcp", server)
-	if err != nil {
-		return nil, err
-	}
+func newBinaryProtocol(ring *Ring) *binaryProtocol {
 	return &binaryProtocol{
-		conn: bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
+		ring: ring,
 		reqHeaderPool: &sync.Pool{New: func() interface{} {
 			return newBinaryRequestHeader()
 		}},
 		resHeaderPool: &sync.Pool{New: func() interface{} {
 			return newBinaryResponseHeader()
 		}},
-	}, nil
+	}
 }
 
 func (b *binaryProtocol) Get(key string) (*Item, error) {
+	s := b.ring.Pick(key)
+
 	header := b.reqHeaderPool.Get().(*binaryRequestHeader)
 	defer b.reqHeaderPool.Put(header)
 	header.Reset()
@@ -751,23 +791,23 @@ func (b *binaryProtocol) Get(key string) (*Item, error) {
 	header.Opcode = binaryOpcodeGet
 	header.KeyLength = uint16(len(key))
 	header.TotalBodyLength = uint32(len(key))
-	if err := header.EncodeTo(b.conn); err != nil {
+	if err := header.EncodeTo(s.conn); err != nil {
 		return nil, err
 	}
-	b.conn.Write([]byte(key))
-	if err := b.conn.Flush(); err != nil {
+	s.conn.Write([]byte(key))
+	if err := s.conn.Flush(); err != nil {
 		return nil, err
 	}
 
 	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
 	defer b.resHeaderPool.Put(resHeader)
 
-	if err := resHeader.Read(b.conn); err != nil {
+	if err := resHeader.Read(s.conn); err != nil {
 		return nil, err
 	}
 
 	buf := make([]byte, resHeader.TotalBodyLength)
-	if _, err := io.ReadFull(b.conn, buf); err != nil {
+	if _, err := io.ReadFull(s.conn, buf); err != nil {
 		return nil, err
 	}
 
@@ -791,89 +831,100 @@ func (b *binaryProtocol) Get(key string) (*Item, error) {
 }
 
 func (b *binaryProtocol) GetMulti(keys ...string) ([]*Item, error) {
-	header := b.reqHeaderPool.Get().(*binaryRequestHeader)
+	keyMap := make(map[string][]string)
 	for _, key := range keys {
-		header.Reset()
-		header.Opcode = binaryOpcodeGetKQ
-		header.KeyLength = uint16(len(key))
-		header.TotalBodyLength = uint32(len(key))
-		if err := header.EncodeTo(b.conn); err != nil {
-			return nil, err
+		s := b.ring.Pick(key)
+		if _, ok := keyMap[s.Name]; !ok {
+			keyMap[s.Name] = make([]string, 0)
 		}
-		b.conn.Write([]byte(key))
-	}
-	b.reqHeaderPool.Put(header)
-
-	header = b.reqHeaderPool.Get().(*binaryRequestHeader)
-	header.Reset()
-	header.Opcode = binaryOpcodeNoop
-	if err := header.EncodeTo(b.conn); err != nil {
-		return nil, err
-	}
-	b.reqHeaderPool.Put(header)
-	if err := b.conn.Flush(); err != nil {
-		return nil, err
+		keyMap[s.Name] = append(keyMap[s.Name], key)
 	}
 
-	items := make([]*Item, 0)
-	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
-	for {
-		if err := resHeader.Read(b.conn); err != nil {
-			return nil, err
-		}
-		if resHeader.Opcode == binaryOpcodeNoop {
-			break
-		}
+	items := make([]*Item, 0, len(keys))
+	for serverName, keys := range keyMap {
+		s := b.ring.Find(serverName)
 
-		if resHeader.Status != 0 {
-			if v, ok := binaryStatus[resHeader.Status]; ok {
-				return nil, fmt.Errorf("memcached: error %s", v)
+		header := b.reqHeaderPool.Get().(*binaryRequestHeader)
+		for _, key := range keys {
+			header.Reset()
+			header.Opcode = binaryOpcodeGetKQ
+			header.KeyLength = uint16(len(key))
+			header.TotalBodyLength = uint32(len(key))
+			if err := header.EncodeTo(s.conn); err != nil {
+				return nil, err
 			}
-			return nil, fmt.Errorf("memcached: unknown error %d", resHeader.Status)
+			s.conn.Write([]byte(key))
 		}
+		b.reqHeaderPool.Put(header)
 
-		buf := make([]byte, resHeader.TotalBodyLength)
-		if _, err := io.ReadFull(b.conn, buf); err != nil {
+		header = b.reqHeaderPool.Get().(*binaryRequestHeader)
+		header.Reset()
+		header.Opcode = binaryOpcodeNoop
+		if err := header.EncodeTo(s.conn); err != nil {
+			return nil, err
+		}
+		b.reqHeaderPool.Put(header)
+		if err := s.conn.Flush(); err != nil {
 			return nil, err
 		}
 
-		flags := 0
-		if resHeader.ExtraLength > 0 {
-			flags = int(binary.BigEndian.Uint32(buf[:resHeader.ExtraLength]))
+		resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
+		for {
+			if err := resHeader.Read(s.conn); err != nil {
+				return nil, err
+			}
+			if resHeader.Opcode == binaryOpcodeNoop {
+				break
+			}
+
+			if resHeader.Status != 0 {
+				if v, ok := binaryStatus[resHeader.Status]; ok {
+					return nil, fmt.Errorf("memcached: error %s", v)
+				}
+				return nil, fmt.Errorf("memcached: unknown error %d", resHeader.Status)
+			}
+
+			buf := make([]byte, resHeader.TotalBodyLength)
+			if _, err := io.ReadFull(s.conn, buf); err != nil {
+				return nil, err
+			}
+
+			flags := 0
+			if resHeader.ExtraLength > 0 {
+				flags = int(binary.BigEndian.Uint32(buf[:resHeader.ExtraLength]))
+			}
+			items = append(items, &Item{
+				Key:   string(buf[resHeader.ExtraLength : uint16(resHeader.ExtraLength)+resHeader.KeyLength]),
+				Value: buf[uint16(resHeader.ExtraLength)+resHeader.KeyLength:],
+				Flags: flags,
+			})
 		}
-		items = append(items, &Item{
-			Key:   string(buf[resHeader.ExtraLength : uint16(resHeader.ExtraLength)+resHeader.KeyLength]),
-			Value: buf[uint16(resHeader.ExtraLength)+resHeader.KeyLength:],
-			Flags: flags,
-		})
 	}
 
 	return items, nil
 }
 
 func (b *binaryProtocol) Set(item *Item) error {
-	extra := make([]byte, 8)
-	binary.BigEndian.PutUint32(extra[4:8], uint32(item.Expiration))
+	s := b.ring.Pick(item.Key)
+
 	header := b.getReqHeader()
 	defer b.putReqHeader(header)
 
 	header.Opcode = binaryOpcodeSet
-	header.KeyLength = uint16(len(item.Key))
-	header.ExtraLength = uint8(len(extra))
-	header.TotalBodyLength = uint32(len(item.Key) + len(item.Value) + len(extra))
-	if err := header.EncodeTo(b.conn); err != nil {
+	extra := item.marshalBinaryRequestHeader(header)
+	if err := header.EncodeTo(s.conn); err != nil {
 		return err
 	}
-	b.conn.Write(extra)
-	b.conn.Write([]byte(item.Key))
-	b.conn.Write(item.Value)
-	if err := b.conn.Flush(); err != nil {
+	s.conn.Write(extra)
+	s.conn.Write([]byte(item.Key))
+	s.conn.Write(item.Value)
+	if err := s.conn.Flush(); err != nil {
 		return err
 	}
 
 	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
 	defer b.resHeaderPool.Put(resHeader)
-	if err := resHeader.Read(b.conn); err != nil {
+	if err := resHeader.Read(s.conn); err != nil {
 		return err
 	}
 	if resHeader.Opcode != binaryOpcodeSet {
@@ -892,29 +943,26 @@ func (b *binaryProtocol) Set(item *Item) error {
 }
 
 func (b *binaryProtocol) Add(item *Item) error {
-	extra := make([]byte, 8)
-	binary.BigEndian.PutUint32(extra[4:8], uint32(item.Expiration))
+	s := b.ring.Pick(item.Key)
 
 	header := b.getReqHeader()
 	defer b.putReqHeader(header)
 
 	header.Opcode = binaryOpcodeAdd
-	header.KeyLength = uint16(len(item.Key))
-	header.ExtraLength = uint8(len(extra))
-	header.TotalBodyLength = uint32(len(item.Key) + len(item.Value) + len(extra))
-	if err := header.EncodeTo(b.conn); err != nil {
+	extra := item.marshalBinaryRequestHeader(header)
+	if err := header.EncodeTo(s.conn); err != nil {
 		return err
 	}
-	b.conn.Write(extra)
-	b.conn.Write([]byte(item.Key))
-	b.conn.Write(item.Value)
-	if err := b.conn.Flush(); err != nil {
+	s.conn.Write(extra)
+	s.conn.Write([]byte(item.Key))
+	s.conn.Write(item.Value)
+	if err := s.conn.Flush(); err != nil {
 		return err
 	}
 
 	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
 	defer b.resHeaderPool.Put(resHeader)
-	if err := resHeader.Read(b.conn); err != nil {
+	if err := resHeader.Read(s.conn); err != nil {
 		return err
 	}
 	if resHeader.Opcode != binaryOpcodeAdd {
@@ -938,29 +986,25 @@ func (b *binaryProtocol) Add(item *Item) error {
 }
 
 func (b *binaryProtocol) Replace(item *Item) error {
-	extra := make([]byte, 8)
-	binary.BigEndian.PutUint32(extra[4:8], uint32(item.Expiration))
-
+	s := b.ring.Pick(item.Key)
 	header := b.getReqHeader()
 	defer b.putReqHeader(header)
 
 	header.Opcode = binaryOpcodeReplace
-	header.KeyLength = uint16(len(item.Key))
-	header.ExtraLength = uint8(len(extra))
-	header.TotalBodyLength = uint32(len(item.Key) + len(item.Value) + len(extra))
-	if err := header.EncodeTo(b.conn); err != nil {
+	extra := item.marshalBinaryRequestHeader(header)
+	if err := header.EncodeTo(s.conn); err != nil {
 		return err
 	}
-	b.conn.Write(extra)
-	b.conn.Write([]byte(item.Key))
-	b.conn.Write(item.Value)
-	if err := b.conn.Flush(); err != nil {
+	s.conn.Write(extra)
+	s.conn.Write([]byte(item.Key))
+	s.conn.Write(item.Value)
+	if err := s.conn.Flush(); err != nil {
 		return err
 	}
 
 	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
 	defer b.resHeaderPool.Put(resHeader)
-	if err := resHeader.Read(b.conn); err != nil {
+	if err := resHeader.Read(s.conn); err != nil {
 		return err
 	}
 	if resHeader.Opcode != binaryOpcodeReplace {
@@ -968,7 +1012,7 @@ func (b *binaryProtocol) Replace(item *Item) error {
 	}
 
 	buf := make([]byte, resHeader.TotalBodyLength)
-	if _, err := io.ReadFull(b.conn, buf); err != nil {
+	if _, err := io.ReadFull(s.conn, buf); err != nil {
 		return err
 	}
 
@@ -989,6 +1033,7 @@ func (b *binaryProtocol) Replace(item *Item) error {
 }
 
 func (b *binaryProtocol) Delete(key string) error {
+	s := b.ring.Pick(key)
 	header := b.reqHeaderPool.Get().(*binaryRequestHeader)
 	defer b.reqHeaderPool.Put(header)
 	header.Reset()
@@ -996,17 +1041,17 @@ func (b *binaryProtocol) Delete(key string) error {
 	header.Opcode = binaryOpcodeDelete
 	header.KeyLength = uint16(len(key))
 	header.TotalBodyLength = uint32(len(key))
-	if err := header.EncodeTo(b.conn); err != nil {
+	if err := header.EncodeTo(s.conn); err != nil {
 		return err
 	}
-	b.conn.Write([]byte(key))
-	if err := b.conn.Flush(); err != nil {
+	s.conn.Write([]byte(key))
+	if err := s.conn.Flush(); err != nil {
 		return err
 	}
 
 	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
 	defer b.resHeaderPool.Put(resHeader)
-	if err := resHeader.Read(b.conn); err != nil {
+	if err := resHeader.Read(s.conn); err != nil {
 		return err
 	}
 	if resHeader.Opcode != binaryOpcodeDelete {
@@ -1014,7 +1059,7 @@ func (b *binaryProtocol) Delete(key string) error {
 	}
 
 	buf := make([]byte, resHeader.TotalBodyLength)
-	if _, err := io.ReadFull(b.conn, buf); err != nil {
+	if _, err := io.ReadFull(s.conn, buf); err != nil {
 		return err
 	}
 
@@ -1043,6 +1088,7 @@ func (b *binaryProtocol) Decr(key string, delta int) (int64, error) {
 }
 
 func (b *binaryProtocol) incrOrDecr(opcode byte, key string, delta int) (int64, error) {
+	s := b.ring.Pick(key)
 	extra := make([]byte, 20)
 	binary.BigEndian.PutUint64(extra[:8], uint64(delta))
 	binary.BigEndian.PutUint64(extra[8:16], 1)
@@ -1055,19 +1101,19 @@ func (b *binaryProtocol) incrOrDecr(opcode byte, key string, delta int) (int64, 
 	header.ExtraLength = uint8(len(extra))
 	header.TotalBodyLength = uint32(len(key) + len(extra))
 
-	if err := header.EncodeTo(b.conn); err != nil {
+	if err := header.EncodeTo(s.conn); err != nil {
 		return 0, err
 	}
-	b.conn.Write(extra)
-	b.conn.Write([]byte(key))
-	if err := b.conn.Flush(); err != nil {
+	s.conn.Write(extra)
+	s.conn.Write([]byte(key))
+	if err := s.conn.Flush(); err != nil {
 		return 0, err
 	}
 
 	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
 	defer b.resHeaderPool.Put(resHeader)
 
-	if err := resHeader.Read(b.conn); err != nil {
+	if err := resHeader.Read(s.conn); err != nil {
 		return 0, err
 	}
 	if resHeader.Opcode != opcode {
@@ -1077,7 +1123,7 @@ func (b *binaryProtocol) incrOrDecr(opcode byte, key string, delta int) (int64, 
 	var body []byte
 	if resHeader.TotalBodyLength > 0 {
 		buf := make([]byte, resHeader.TotalBodyLength)
-		if _, err := io.ReadFull(b.conn, buf); err != nil {
+		if _, err := io.ReadFull(s.conn, buf); err != nil {
 			return 0, err
 		}
 		body = buf
@@ -1099,6 +1145,7 @@ func (b *binaryProtocol) incrOrDecr(opcode byte, key string, delta int) (int64, 
 }
 
 func (b *binaryProtocol) Touch(key string, expiration int) error {
+	s := b.ring.Pick(key)
 	extra := make([]byte, 4)
 	binary.BigEndian.PutUint32(extra, uint32(expiration))
 	header := b.reqHeaderPool.Get().(*binaryRequestHeader)
@@ -1109,19 +1156,19 @@ func (b *binaryProtocol) Touch(key string, expiration int) error {
 	header.ExtraLength = uint8(len(extra))
 	header.KeyLength = uint16(len(key))
 	header.TotalBodyLength = uint32(len(key) + len(extra))
-	if err := header.EncodeTo(b.conn); err != nil {
+	if err := header.EncodeTo(s.conn); err != nil {
 		return err
 	}
-	b.conn.Write(extra)
-	b.conn.Write([]byte(key))
-	if err := b.conn.Flush(); err != nil {
+	s.conn.Write(extra)
+	s.conn.Write([]byte(key))
+	if err := s.conn.Flush(); err != nil {
 		return err
 	}
 
 	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
 	defer b.resHeaderPool.Put(resHeader)
 
-	if err := resHeader.Read(b.conn); err != nil {
+	if err := resHeader.Read(s.conn); err != nil {
 		return err
 	}
 
@@ -1137,61 +1184,69 @@ func (b *binaryProtocol) Touch(key string, expiration int) error {
 }
 
 func (b *binaryProtocol) Flush() error {
-	header := b.getReqHeader()
-	defer b.putReqHeader(header)
+	return b.ring.Each(func(s *Server) error {
+		header := b.getReqHeader()
+		defer b.putReqHeader(header)
 
-	header.Opcode = binaryOpcodeFlush
-	if err := header.EncodeTo(b.conn); err != nil {
-		return err
-	}
-	if err := b.conn.Flush(); err != nil {
-		return err
-	}
+		header.Opcode = binaryOpcodeFlush
+		if err := header.EncodeTo(s.conn); err != nil {
+			return err
+		}
+		if err := s.conn.Flush(); err != nil {
+			return err
+		}
 
-	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
-	defer b.resHeaderPool.Put(resHeader)
+		resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
+		defer b.resHeaderPool.Put(resHeader)
 
-	if err := resHeader.Read(b.conn); err != nil {
-		return err
-	}
-	if resHeader.Opcode != binaryOpcodeFlush {
-		return errors.New("memcached: invalid response")
-	}
+		if err := resHeader.Read(s.conn); err != nil {
+			return err
+		}
+		if resHeader.Opcode != binaryOpcodeFlush {
+			return errors.New("memcached: invalid response")
+		}
 
-	return nil
+		return nil
+	})
 }
 
-func (b *binaryProtocol) Version() (string, error) {
-	header := b.getReqHeader()
-	defer b.putReqHeader(header)
+func (b *binaryProtocol) Version() (map[string]string, error) {
+	result := make(map[string]string)
+	err := b.ring.Each(func(s *Server) error {
+		header := b.getReqHeader()
+		defer b.putReqHeader(header)
 
-	header.Opcode = binaryOpcodeVersion
-	if err := header.EncodeTo(b.conn); err != nil {
-		return "", err
-	}
-	if err := b.conn.Flush(); err != nil {
-		return "", err
-	}
-
-	resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
-	defer b.resHeaderPool.Put(resHeader)
-	if err := resHeader.Read(b.conn); err != nil {
-		return "", err
-	}
-
-	if resHeader.Status != 0 {
-		if v, ok := binaryStatus[resHeader.Status]; ok {
-			return "", fmt.Errorf("memcached: error %s", v)
+		header.Opcode = binaryOpcodeVersion
+		if err := header.EncodeTo(s.conn); err != nil {
+			return err
 		}
-		return "", fmt.Errorf("memcached: unknown error %d", resHeader.Status)
-	}
+		if err := s.conn.Flush(); err != nil {
+			return err
+		}
 
-	buf := make([]byte, resHeader.TotalBodyLength)
-	if _, err := io.ReadFull(b.conn, buf); err != nil {
-		return "", err
-	}
+		resHeader := b.resHeaderPool.Get().(*binaryResponseHeader)
+		defer b.resHeaderPool.Put(resHeader)
+		if err := resHeader.Read(s.conn); err != nil {
+			return err
+		}
 
-	return string(buf), nil
+		if resHeader.Status != 0 {
+			if v, ok := binaryStatus[resHeader.Status]; ok {
+				return fmt.Errorf("memcached: error %s", v)
+			}
+			return fmt.Errorf("memcached: unknown error %d", resHeader.Status)
+		}
+
+		buf := make([]byte, resHeader.TotalBodyLength)
+		if _, err := io.ReadFull(s.conn, buf); err != nil {
+			return err
+		}
+
+		result[s.Name] = string(buf)
+		return nil
+	})
+
+	return result, err
 }
 
 func (b *binaryProtocol) getReqHeader() *binaryRequestHeader {
@@ -1230,7 +1285,7 @@ func (h *binaryRequestHeader) EncodeTo(w io.Writer) error {
 	binary.BigEndian.PutUint16(h.buf[6:8], 0)                  // vbucket id
 	binary.BigEndian.PutUint32(h.buf[8:12], h.TotalBodyLength) // total body len
 	binary.BigEndian.PutUint32(h.buf[12:16], 0)                // opaque
-	binary.BigEndian.PutUint64(h.buf[16:24], 0)                //cas
+	binary.BigEndian.PutUint64(h.buf[16:24], 0)                // cas
 
 	if _, err := w.Write(h.buf); err != nil {
 		return err
