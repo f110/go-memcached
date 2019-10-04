@@ -390,6 +390,41 @@ func TestClient_Decrement(t *testing.T) {
 	})
 }
 
+func TestClient_Flush(t *testing.T) {
+	testFn := func(t *testing.T, c *Client) {
+		defer func() {
+			if err := c.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}()
+
+		if err := c.Set(&Item{Key: t.Name(), Value: []byte("OK")}); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := c.Flush(); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := c.Get(t.Name())
+		if err == nil || err != ItemNotFound {
+			t.Fatal("expect item not found")
+		}
+	}
+
+	t.Run("TextProtocol", func(t *testing.T) {
+		testFn(t, newTextProtocolClient(t))
+	})
+
+	t.Run("MetaProtocol", func(t *testing.T) {
+		testFn(t, newMetaProtocolClient(t))
+	})
+
+	t.Run("BinaryProtocol", func(t *testing.T) {
+		testFn(t, newBinaryProtocolClient(t))
+	})
+}
+
 func TestClient_Version(t *testing.T) {
 	testFn := func(t *testing.T, c *Client) {
 		defer func() {

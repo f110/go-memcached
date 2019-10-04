@@ -515,7 +515,7 @@ func (t *textProtocol) Replace(item *Item) error {
 
 func (t *textProtocol) Flush() error {
 	return t.ring.Each(func(s *Server) error {
-		if _, err := fmt.Fprint(s.conn, "flush_all"); err != nil {
+		if _, err := fmt.Fprint(s.conn, "flush_all\r\n"); err != nil {
 			return err
 		}
 		if err := s.conn.Flush(); err != nil {
@@ -824,7 +824,10 @@ func (m *metaProtocol) Touch(key string, expiration int) error {
 
 func (m *metaProtocol) Flush() error {
 	return m.ring.Each(func(s *Server) error {
-		if _, err := fmt.Fprint(s.conn, "flush_all"); err != nil {
+		if _, err := fmt.Fprint(s.conn, "flush_all\r\n"); err != nil {
+			return err
+		}
+		if err := s.conn.Flush(); err != nil {
 			return err
 		}
 		b, err := s.conn.ReadSlice('\n')
