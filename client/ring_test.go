@@ -1,19 +1,8 @@
 package client
 
 import (
-	"log"
 	"testing"
 )
-
-func TestNewRing(t *testing.T) {
-	r := NewRing(
-		&Server{Name: "test-1"},
-		&Server{Name: "test-2"},
-	)
-	for i := 1; i < len(r.nodes); i++ {
-		log.Print(r.nodes[i].hash - r.nodes[i-1].hash)
-	}
-}
 
 func TestRing_Pick(t *testing.T) {
 	// crc32.ChecksumIEEE("test") = 2326977762

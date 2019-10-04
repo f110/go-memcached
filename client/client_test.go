@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-var memcachedHost = "localhost:11211"
+var memcachedHost = "localhost:11212"
 
 func init() {
 	flag.StringVar(&memcachedHost, "memcached-host", memcachedHost, "memcached host")
@@ -92,16 +92,48 @@ func TestClient_Set(t *testing.T) {
 		}
 	}
 
+	testCasFn := func(t *testing.T, c *Client) {
+		if err := c.Set(&Item{Key: t.Name(), Value: []byte("foo")}); err != nil {
+			t.Fatal(err)
+		}
+
+		item, err := c.Get(t.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		casUnique := item.Cas
+
+		if err := c.Set(&Item{Key: t.Name(), Value: []byte("bar"), Cas: casUnique}); err != nil {
+			t.Fatal(err)
+		}
+		item, err = c.Get(t.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(item.Value, []byte("bar")) {
+			t.Fatalf("unexpected value: %v", item.Value)
+		}
+
+		if err := c.Set(&Item{Key: t.Name(), Value: []byte("foo"), Cas: casUnique}); err == nil {
+			t.Errorf("unexpected error: %v", err)
+		} else if err != ItemExists {
+			t.Errorf("expect item exists: %v", err)
+		}
+	}
+
 	t.Run("TextProtocol", func(t *testing.T) {
 		testFn(t, newTextProtocolClient(t))
+		testCasFn(t, newTextProtocolClient(t))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
 		testFn(t, newMetaProtocolClient(t))
+		testCasFn(t, newMetaProtocolClient(t))
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
 		testFn(t, newBinaryProtocolClient(t))
+		testCasFn(t, newBinaryProtocolClient(t))
 	})
 }
 

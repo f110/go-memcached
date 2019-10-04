@@ -25,6 +25,7 @@ var (
 	msgTextProtoDeleted  = []byte("DELETED\r\n")
 	msgTextProtoNotFound = []byte("NOT_FOUND\r\n")
 	msgTextProtoTouched  = []byte("TOUCHED\r\n")
+	msgTextProtoExists   = []byte("EXISTS\r\n")
 	msgTextProtoOk       = []byte("OK\r\n")
 	msgTextProtoEnd      = []byte("END\r\n")
 
@@ -36,6 +37,7 @@ var (
 	msgMetaProtoEnd     = []byte("EN\r\n")
 	msgMetaProtoStored  = []byte("ST ")
 	msgMetaProtoDeleted = []byte("DE ")
+	msgMetaProtoExists  = []byte("EX ")
 )
 
 var (
@@ -81,9 +83,9 @@ var (
 type Item struct {
 	Key        string
 	Value      []byte
-	Flags      int
+	Flags      []byte
 	Expiration int
-	Cas        int
+	Cas        uint64
 }
 
 func (i *Item) marshalBinaryRequestHeader(h *binaryRequestHeader) []byte {
@@ -92,6 +94,7 @@ func (i *Item) marshalBinaryRequestHeader(h *binaryRequestHeader) []byte {
 	h.KeyLength = uint16(len(i.Key))
 	h.ExtraLength = uint8(len(extra))
 	h.TotalBodyLength = uint32(len(i.Key) + len(i.Value) + len(extra))
+	h.CAS = i.Cas
 	return extra
 }
 
@@ -196,7 +199,7 @@ func (t *textProtocol) Get(key string) (*Item, error) {
 	s.Lock()
 	defer s.Unlock()
 
-	if _, err := fmt.Fprintf(s.conn, "get %s\r\n", key); err != nil {
+	if _, err := fmt.Fprintf(s.conn, "gets %s\r\n", key); err != nil {
 		return nil, err
 	}
 	if err := s.conn.Flush(); err != nil {
@@ -215,7 +218,8 @@ func (t *textProtocol) Get(key string) (*Item, error) {
 	item := &Item{}
 	size := 0
 	p := valueFormatWithCas
-	scan := []interface{}{&item.Key, &item.Flags, &size, &item.Cas}
+	var flags uint32
+	scan := []interface{}{&item.Key, &flags, &size, &item.Cas}
 	if bytes.Count(b, []byte(" ")) == 3 {
 		p = valueFormat
 		scan = scan[:3]
@@ -223,8 +227,11 @@ func (t *textProtocol) Get(key string) (*Item, error) {
 	if _, err := fmt.Fscanf(bytes.NewReader(b), p, scan...); err != nil {
 		return nil, err
 	}
-	buf := make([]byte, size+2)
+	f := make([]byte, 4)
+	binary.BigEndian.PutUint32(f, flags)
+	item.Flags = f
 
+	buf := make([]byte, size+2)
 	if _, err := io.ReadFull(s.conn, buf); err != nil {
 		return nil, err
 	}
@@ -289,10 +296,14 @@ func (t *textProtocol) parseGetResponse(r *bufio.Reader) ([]*Item, error) {
 		if !bytes.Equal(s[0], []byte("VALUE")) {
 			return nil, errors.New("memcached: invalid response")
 		}
+
 		f, err := strconv.Atoi(string(s[2]))
 		if err != nil {
 			return nil, err
 		}
+		flags := make([]byte, 4)
+		binary.BigEndian.PutUint32(flags, uint32(f))
+
 		var size int
 		if len(s) == 4 {
 			size, err = strconv.Atoi(string(s[3][:len(s[3])-2]))
@@ -302,10 +313,11 @@ func (t *textProtocol) parseGetResponse(r *bufio.Reader) ([]*Item, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		buf := make([]byte, size+2)
 		item := &Item{
 			Key:   string(s[1]),
-			Flags: f,
+			Flags: flags,
 		}
 		if _, err := io.ReadFull(r, buf); err != nil {
 			return nil, err
@@ -409,8 +421,18 @@ func (t *textProtocol) Set(item *Item) error {
 	s.Lock()
 	defer s.Unlock()
 
-	if _, err := fmt.Fprintf(s.conn, "set %s %d %d %d\r\n", item.Key, item.Flags, item.Expiration, len(item.Value)); err != nil {
-		return err
+	flags := uint32(0)
+	if len(item.Flags) == 4 {
+		flags = binary.BigEndian.Uint32(item.Flags)
+	}
+	if item.Cas > 0 {
+		if _, err := fmt.Fprintf(s.conn, "cas %s %d %d %d %d\r\n", item.Key, flags, item.Expiration, len(item.Value), item.Cas); err != nil {
+			return err
+		}
+	} else {
+		if _, err := fmt.Fprintf(s.conn, "set %s %d %d %d\r\n", item.Key, flags, item.Expiration, len(item.Value)); err != nil {
+			return err
+		}
 	}
 	if _, err := s.conn.Write(append(item.Value, crlf...)); err != nil {
 		return err
@@ -426,6 +448,8 @@ func (t *textProtocol) Set(item *Item) error {
 	switch {
 	case bytes.Equal(buf, msgTextProtoStored):
 		return nil
+	case bytes.Equal(buf, msgTextProtoExists):
+		return ItemExists
 	default:
 		return fmt.Errorf("memcached: failed set: %s", string(buf))
 	}
@@ -436,7 +460,11 @@ func (t *textProtocol) Add(item *Item) error {
 	s.Lock()
 	defer s.Unlock()
 
-	if _, err := fmt.Fprintf(s.conn, "add %s %d %d %d\r\n", item.Key, item.Flags, item.Expiration, len(item.Value)); err != nil {
+	flags := uint32(0)
+	if len(item.Flags) == 4 {
+		flags = binary.BigEndian.Uint32(item.Flags)
+	}
+	if _, err := fmt.Fprintf(s.conn, "add %s %d %d %d\r\n", item.Key, flags, item.Expiration, len(item.Value)); err != nil {
 		return err
 	}
 	s.conn.Write(item.Value)
@@ -461,7 +489,11 @@ func (t *textProtocol) Replace(item *Item) error {
 	s.Lock()
 	defer s.Unlock()
 
-	if _, err := fmt.Fprintf(s.conn, "replace %s %d %d %d\r\n", item.Key, item.Flags, item.Expiration, len(item.Value)); err != nil {
+	flags := uint32(0)
+	if len(item.Flags) == 4 {
+		flags = binary.BigEndian.Uint32(item.Flags)
+	}
+	if _, err := fmt.Fprintf(s.conn, "replace %s %d %d %d\r\n", item.Key, flags, item.Expiration, len(item.Value)); err != nil {
 		return err
 	}
 	s.conn.Write(item.Value)
@@ -547,14 +579,14 @@ func (m *metaProtocol) Get(key string) (*Item, error) {
 	s.Lock()
 	defer s.Unlock()
 
-	if _, err := fmt.Fprintf(s.conn, "mg %s svf\r\n", key); err != nil {
+	if _, err := fmt.Fprintf(s.conn, "mg %s svfc\r\n", key); err != nil {
 		return nil, err
 	}
 	if err := s.conn.Flush(); err != nil {
 		return nil, err
 	}
 
-	return m.parseGetResponse(s.conn, "svf")
+	return m.parseGetResponse(s.conn, "svfc")
 }
 
 func (m *metaProtocol) GetMulti(keys ...string) ([]*Item, error) {
@@ -572,7 +604,7 @@ func (m *metaProtocol) GetMulti(keys ...string) ([]*Item, error) {
 		s := m.ring.Find(serverName)
 		s.Lock()
 		for _, key := range keys {
-			if _, err := fmt.Fprintf(s.conn, "mg %s svfk\r\n", key); err != nil {
+			if _, err := fmt.Fprintf(s.conn, "mg %s svfkc\r\n", key); err != nil {
 				s.Unlock()
 				return nil, err
 			}
@@ -585,7 +617,7 @@ func (m *metaProtocol) GetMulti(keys ...string) ([]*Item, error) {
 
 	MultiRead:
 		for {
-			item, err := m.parseGetResponse(s.conn, "svfk")
+			item, err := m.parseGetResponse(s.conn, "svfkc")
 			if err != nil {
 				switch err {
 				case ItemNotFound:
@@ -618,22 +650,30 @@ func (m *metaProtocol) parseGetResponse(conn *bufio.ReadWriter, flags string) (*
 	size := 0
 	scan := make([]interface{}, 0, len(flags))
 	format := ""
+	var flag uint32
 	for _, t := range flags {
 		switch t {
 		case 's':
 			scan = append(scan, &size)
 			format += " %d"
 		case 'f':
-			scan = append(scan, &item.Flags)
+			scan = append(scan, &flag)
 			format += " %d"
 		case 'k':
 			scan = append(scan, &item.Key)
 			format += " %s"
+		case 'c':
+			scan = append(scan, &item.Cas)
+			format += " %d"
 		}
 	}
 	if _, err := fmt.Fscanf(bytes.NewReader(b), "VA "+flags+format, scan...); err != nil {
 		return nil, err
 	}
+	f := make([]byte, 4)
+	binary.BigEndian.PutUint32(f, flag)
+	item.Flags = f
+
 	buf := make([]byte, size+2)
 	if _, err := io.ReadFull(conn, buf); err != nil {
 		return nil, err
@@ -656,8 +696,14 @@ func (m *metaProtocol) Set(item *Item) error {
 	s.Lock()
 	defer s.Unlock()
 
-	if _, err := fmt.Fprintf(s.conn, "ms %s S %d\r\n", item.Key, len(item.Value)); err != nil {
-		return err
+	if item.Cas > 0 {
+		if _, err := fmt.Fprintf(s.conn, "ms %s SC %d %d\r\n", item.Key, len(item.Value), item.Cas); err != nil {
+			return err
+		}
+	} else {
+		if _, err := fmt.Fprintf(s.conn, "ms %s S %d\r\n", item.Key, len(item.Value)); err != nil {
+			return err
+		}
 	}
 	if _, err := s.conn.Write(append(item.Value, crlf...)); err != nil {
 		return err
@@ -669,8 +715,11 @@ func (m *metaProtocol) Set(item *Item) error {
 	if err != nil {
 		return err
 	}
-	if bytes.HasPrefix(b, msgMetaProtoStored) {
+	switch {
+	case bytes.HasPrefix(b, msgMetaProtoStored):
 		return nil
+	case bytes.HasPrefix(b, msgMetaProtoExists):
+		return ItemExists
 	}
 
 	return errors.New("memcached: failed set")
@@ -887,7 +936,8 @@ func (b *binaryProtocol) Get(key string) (*Item, error) {
 	return &Item{
 		Key:   key,
 		Value: buf[uint16(resHeader.ExtraLength)+resHeader.KeyLength:],
-		Flags: int(binary.BigEndian.Uint32(buf[:resHeader.ExtraLength])),
+		Flags: buf[:resHeader.ExtraLength],
+		Cas:   resHeader.CAS,
 	}, nil
 }
 
@@ -958,14 +1008,10 @@ func (b *binaryProtocol) GetMulti(keys ...string) ([]*Item, error) {
 				return nil, err
 			}
 
-			flags := 0
-			if resHeader.ExtraLength > 0 {
-				flags = int(binary.BigEndian.Uint32(buf[:resHeader.ExtraLength]))
-			}
 			items = append(items, &Item{
 				Key:   string(buf[resHeader.ExtraLength : uint16(resHeader.ExtraLength)+resHeader.KeyLength]),
 				Value: buf[uint16(resHeader.ExtraLength)+resHeader.KeyLength:],
-				Flags: flags,
+				Flags: buf[:resHeader.ExtraLength],
 			})
 		}
 		s.Unlock()
@@ -1004,10 +1050,15 @@ func (b *binaryProtocol) Set(item *Item) error {
 	}
 
 	if resHeader.Status != 0 {
-		if v, ok := binaryStatus[resHeader.Status]; ok {
-			return fmt.Errorf("memcached: error %s", v)
-		} else {
-			return fmt.Errorf("memcached: unknown error %d", resHeader.Status)
+		switch resHeader.Status {
+		case 2: // key exists
+			return ItemExists
+		default:
+			if v, ok := binaryStatus[resHeader.Status]; ok {
+				return fmt.Errorf("memcached: error %s", v)
+			} else {
+				return fmt.Errorf("memcached: unknown error %d", resHeader.Status)
+			}
 		}
 	}
 
@@ -1375,7 +1426,7 @@ func (h *binaryRequestHeader) EncodeTo(w io.Writer) error {
 	binary.BigEndian.PutUint16(h.buf[6:8], 0)                  // vbucket id
 	binary.BigEndian.PutUint32(h.buf[8:12], h.TotalBodyLength) // total body len
 	binary.BigEndian.PutUint32(h.buf[12:16], 0)                // opaque
-	binary.BigEndian.PutUint64(h.buf[16:24], 0)                // cas
+	binary.BigEndian.PutUint64(h.buf[16:24], h.CAS)            // cas
 
 	if _, err := w.Write(h.buf); err != nil {
 		return err
