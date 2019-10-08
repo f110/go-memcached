@@ -1,82 +1,32 @@
 package client
 
 import (
-	"bufio"
-	"context"
 	"crypto/sha1"
 	"encoding/binary"
 	"hash/crc32"
-	"net"
 	"sort"
 	"strconv"
-	"sync"
 )
 
 const (
 	numberOfDivideServer = 200
 )
 
-const (
-	ServerDeleteOnly ServerOperationType = "delete_only"
-	ServerWriteOnly  ServerOperationType = "write_only"
-)
-
-type ServerOperationType string
-
-type Server struct {
-	Name    string
-	Network string
-	Addr    string
-	Type    ServerOperationType
-
-	conn *bufio.ReadWriter
-	raw  net.Conn
-	mu   sync.Mutex
-}
-
-func NewServer(ctx context.Context, name, network, addr string) (*Server, error) {
-	d := &net.Dialer{}
-	conn, err := d.DialContext(ctx, network, addr)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Server{
-		Name:    name,
-		Network: network,
-		Addr:    addr,
-		conn:    bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
-		raw:     conn,
-	}, nil
-}
-
-func (s *Server) Lock() {
-	s.mu.Lock()
-}
-
-func (s *Server) Unlock() {
-	s.mu.Unlock()
-}
-
-func (s *Server) Close() error {
-	return s.raw.Close()
-}
-
 type Node struct {
-	Server *Server
+	Server Server
 	hash   uint32
 }
 
 type Ring struct {
 	nodes   []*Node
-	servers map[string]*Server
+	servers map[string]Server
 }
 
-func NewRing(servers ...*Server) *Ring {
+func NewRing(servers ...Server) *Ring {
 	nodes := make([]*Node, 0, len(servers)+numberOfDivideServer)
 	for _, v := range servers {
 		for i := 0; i < numberOfDivideServer; i++ {
-			s := sha1.Sum([]byte(v.Name + "/" + strconv.Itoa(i)))
+			s := sha1.Sum([]byte(v.Name() + "/" + strconv.Itoa(i)))
 			nodes = append(nodes, &Node{
 				Server: v,
 				hash:   binary.BigEndian.Uint32(s[:4]),
@@ -88,9 +38,9 @@ func NewRing(servers ...*Server) *Ring {
 		return nodes[i].hash < nodes[j].hash
 	})
 
-	s := make(map[string]*Server)
+	s := make(map[string]Server)
 	for _, v := range servers {
-		s[v.Name] = v
+		s[v.Name()] = v
 	}
 
 	return &Ring{
@@ -99,7 +49,7 @@ func NewRing(servers ...*Server) *Ring {
 	}
 }
 
-func (r *Ring) Pick(key string) *Server {
+func (r *Ring) Pick(key string) Server {
 	h := crc32.ChecksumIEEE([]byte(key))
 
 	lower := 0
@@ -122,18 +72,15 @@ Search:
 	return r.nodes[upper].Server
 }
 
-func (r *Ring) Find(name string) *Server {
+func (r *Ring) Find(name string) Server {
 	return r.servers[name]
 }
 
-func (r *Ring) Each(fn func(s *Server) error) error {
+func (r *Ring) Each(fn func(s Server) error) error {
 	for _, s := range r.servers {
-		s.Lock()
 		if err := fn(s); err != nil {
-			s.Unlock()
 			return err
 		}
-		s.Unlock()
 	}
 
 	return nil

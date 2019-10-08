@@ -14,12 +14,8 @@ func init() {
 	flag.StringVar(&memcachedHost, "memcached-host", memcachedHost, "memcached host")
 }
 
-func newClient(t *testing.T, protocol string) *Client {
-	server, err := NewServer(context.Background(), "test", "tcp", memcachedHost)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := NewClient(context.Background(), protocol, server)
+func newClient(t *testing.T, server Server) *SinglePool {
+	c, err := NewSinglePool(server)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,20 +23,32 @@ func newClient(t *testing.T, protocol string) *Client {
 	return c
 }
 
-func newTextProtocolClient(t *testing.T) *Client {
-	return newClient(t, ProtocolText)
+func newTextProtocolClient(t *testing.T) *SinglePool {
+	server, err := NewServerWithTextProtocol(context.Background(), "test", "tcp", memcachedHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newClient(t, server)
 }
 
-func newMetaProtocolClient(t *testing.T) *Client {
-	return newClient(t, ProtocolMeta)
+func newMetaProtocolClient(t *testing.T) *SinglePool {
+	server, err := NewServerWithMetaProtocol(context.Background(), "test", "tcp", memcachedHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newClient(t, server)
 }
 
-func newBinaryProtocolClient(t *testing.T) *Client {
-	return newClient(t, ProtocolBinary)
+func newBinaryProtocolClient(t *testing.T) *SinglePool {
+	server, err := NewServerWithBinaryProtocol(context.Background(), "test", "tcp", memcachedHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newClient(t, server)
 }
 
 func TestClient_Get(t *testing.T) {
-	testFn := func(t *testing.T, c *Client) {
+	testFn := func(t *testing.T, c *SinglePool) {
 		defer func() {
 			if err := c.Close(); err != nil {
 				t.Fatal(err)
@@ -73,7 +81,7 @@ func TestClient_Get(t *testing.T) {
 }
 
 func TestClient_Set(t *testing.T) {
-	testFn := func(t *testing.T, c *Client) {
+	testFn := func(t *testing.T, c *SinglePool) {
 		defer func() {
 			if err := c.Close(); err != nil {
 				t.Fatal(err)
@@ -92,7 +100,7 @@ func TestClient_Set(t *testing.T) {
 		}
 	}
 
-	testCasFn := func(t *testing.T, c *Client) {
+	testCasFn := func(t *testing.T, c *SinglePool) {
 		if err := c.Set(&Item{Key: t.Name(), Value: []byte("foo")}); err != nil {
 			t.Fatal(err)
 		}
@@ -138,7 +146,7 @@ func TestClient_Set(t *testing.T) {
 }
 
 func TestClient_Add(t *testing.T) {
-	testFn := func(t *testing.T, c *Client) {
+	testFn := func(t *testing.T, c *SinglePool) {
 		defer func() {
 			if err := c.Close(); err != nil {
 				t.Fatal(err)
@@ -175,7 +183,7 @@ func TestClient_Add(t *testing.T) {
 }
 
 func TestClient_Replace(t *testing.T) {
-	testFn := func(t *testing.T, c *Client) {
+	testFn := func(t *testing.T, c *SinglePool) {
 		defer func() {
 			if err := c.Close(); err != nil {
 				t.Fatal(err)
@@ -224,7 +232,7 @@ func TestClient_Replace(t *testing.T) {
 }
 
 func TestClient_GetMulti(t *testing.T) {
-	testFn := func(t *testing.T, c *Client) {
+	testFn := func(t *testing.T, c *SinglePool) {
 		defer func() {
 			if err := c.Close(); err != nil {
 				t.Fatal(err)
@@ -265,7 +273,7 @@ func TestClient_GetMulti(t *testing.T) {
 }
 
 func TestClient_Delete(t *testing.T) {
-	testFn := func(t *testing.T, c *Client) {
+	testFn := func(t *testing.T, c *SinglePool) {
 		defer func() {
 			if err := c.Close(); err != nil {
 				t.Fatal(err)
@@ -300,7 +308,7 @@ func TestClient_Delete(t *testing.T) {
 }
 
 func TestClient_Touch(t *testing.T) {
-	testFn := func(t *testing.T, c *Client) {
+	testFn := func(t *testing.T, c *SinglePool) {
 		defer func() {
 			if err := c.Close(); err != nil {
 				t.Fatal(err)
@@ -329,7 +337,7 @@ func TestClient_Touch(t *testing.T) {
 }
 
 func TestClient_Increment(t *testing.T) {
-	testFn := func(t *testing.T, c *Client) {
+	testFn := func(t *testing.T, c *SinglePool) {
 		if err := c.Set(&Item{Key: t.Name(), Value: []byte("1")}); err != nil {
 			t.Fatal(err)
 		}
@@ -357,7 +365,7 @@ func TestClient_Increment(t *testing.T) {
 }
 
 func TestClient_Decrement(t *testing.T) {
-	testFn := func(t *testing.T, c *Client) {
+	testFn := func(t *testing.T, c *SinglePool) {
 		defer func() {
 			if err := c.Close(); err != nil {
 				t.Fatal(err)
@@ -391,7 +399,7 @@ func TestClient_Decrement(t *testing.T) {
 }
 
 func TestClient_Flush(t *testing.T) {
-	testFn := func(t *testing.T, c *Client) {
+	testFn := func(t *testing.T, c *SinglePool) {
 		defer func() {
 			if err := c.Close(); err != nil {
 				t.Fatal(err)
@@ -426,7 +434,7 @@ func TestClient_Flush(t *testing.T) {
 }
 
 func TestClient_Version(t *testing.T) {
-	testFn := func(t *testing.T, c *Client) {
+	testFn := func(t *testing.T, c *SinglePool) {
 		defer func() {
 			if err := c.Close(); err != nil {
 				t.Fatal(err)
@@ -457,7 +465,7 @@ func TestClient_Version(t *testing.T) {
 }
 
 func Benchmark_Get(b *testing.B) {
-	benchFn := func(b *testing.B, c *Client) {
+	benchFn := func(b *testing.B, c *SinglePool) {
 		defer func() {
 			if err := c.Close(); err != nil {
 				b.Fatal(err)
@@ -476,11 +484,11 @@ func Benchmark_Get(b *testing.B) {
 	}
 
 	b.Run("TextProtocol", func(b *testing.B) {
-		server, err := NewServer(context.Background(), "test", "tcp", memcachedHost)
+		server, err := NewServerWithTextProtocol(context.Background(), "test", "tcp", memcachedHost)
 		if err != nil {
 			b.Fatal(err)
 		}
-		c, err := NewClient(context.Background(), ProtocolText, server)
+		c, err := NewSinglePool(server)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -489,11 +497,11 @@ func Benchmark_Get(b *testing.B) {
 	})
 
 	b.Run("MetaProtocol", func(b *testing.B) {
-		server, err := NewServer(context.Background(), "test", "tcp", memcachedHost)
+		server, err := NewServerWithMetaProtocol(context.Background(), "test", "tcp", memcachedHost)
 		if err != nil {
 			b.Fatal(err)
 		}
-		c, err := NewClient(context.Background(), ProtocolMeta, server)
+		c, err := NewSinglePool(server)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -502,11 +510,11 @@ func Benchmark_Get(b *testing.B) {
 	})
 
 	b.Run("BinaryProtocol", func(b *testing.B) {
-		server, err := NewServer(context.Background(), "test", "tcp", memcachedHost)
+		server, err := NewServerWithBinaryProtocol(context.Background(), "test", "tcp", memcachedHost)
 		if err != nil {
 			b.Fatal(err)
 		}
-		c, err := NewClient(context.Background(), ProtocolBinary, server)
+		c, err := NewSinglePool(server)
 		if err != nil {
 			b.Fatal(err)
 		}
