@@ -34,7 +34,7 @@ func newTestReplicaPool(t *testing.T) *testReplicaPool {
 	return &testReplicaPool{
 		primaryProcess:   primaryProcess,
 		secondaryProcess: secondaryProcess,
-		replicaPool:      NewReplicaPool([]client.Server{primaryServer}, []client.Server{secondaryServer}),
+		replicaPool:      NewReplicaPool([]*client.ServerWithMetaProtocol{primaryServer}, []*client.ServerWithMetaProtocol{secondaryServer}),
 	}
 }
 

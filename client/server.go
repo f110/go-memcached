@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 var (
@@ -92,8 +93,8 @@ type Server interface {
 	Add(item *Item) error
 	Replace(item *Item) error
 	Delete(key string) error
-	Increment(key string, delta int) (int64, error)
-	Decrement(key string, delta int) (int64, error)
+	Increment(key string, delta int, expiration int) (int64, error)
+	Decrement(key string, delta int, expiration int) (int64, error)
 	Touch(key string, expiration int) error
 	Flush() error
 	Version() (string, error)
@@ -107,6 +108,7 @@ type ServerWithTextProtocol struct {
 
 	conn *bufio.ReadWriter
 	raw  net.Conn
+	mu   sync.Mutex
 }
 
 var _ Server = &ServerWithTextProtocol{}
@@ -136,6 +138,9 @@ func (s *ServerWithTextProtocol) Close() error {
 }
 
 func (s *ServerWithTextProtocol) Get(key string) (*Item, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "gets %s\r\n", key); err != nil {
 		return nil, err
 	}
@@ -186,6 +191,9 @@ func (s *ServerWithTextProtocol) Get(key string) (*Item, error) {
 }
 
 func (s *ServerWithTextProtocol) GetMulti(keys ...string) ([]*Item, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	items := make([]*Item, 0, len(keys))
 	if _, err := fmt.Fprintf(s.conn, "gets %s\r\n", strings.Join(keys, " ")); err != nil {
 		return nil, err
@@ -253,6 +261,9 @@ func (s *ServerWithTextProtocol) parseGetResponse(r *bufio.Reader) ([]*Item, err
 }
 
 func (s *ServerWithTextProtocol) Delete(key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "delete %s\r\n", key); err != nil {
 		return err
 	}
@@ -273,15 +284,18 @@ func (s *ServerWithTextProtocol) Delete(key string) error {
 	return nil
 }
 
-func (s *ServerWithTextProtocol) Increment(key string, delta int) (int64, error) {
+func (s *ServerWithTextProtocol) Increment(key string, delta, _ int) (int64, error) {
 	return s.incrOrDecr("incr", key, delta)
 }
 
-func (s *ServerWithTextProtocol) Decrement(key string, delta int) (int64, error) {
+func (s *ServerWithTextProtocol) Decrement(key string, delta, _ int) (int64, error) {
 	return s.incrOrDecr("decr", key, delta)
 }
 
 func (s *ServerWithTextProtocol) incrOrDecr(op, key string, delta int) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "%s %s %d\r\n", op, key, delta); err != nil {
 		return 0, err
 	}
@@ -306,6 +320,9 @@ func (s *ServerWithTextProtocol) incrOrDecr(op, key string, delta int) (int64, e
 }
 
 func (s *ServerWithTextProtocol) Touch(key string, expiration int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "touch %s %d\r\n", key, expiration); err != nil {
 		return err
 	}
@@ -328,6 +345,9 @@ func (s *ServerWithTextProtocol) Touch(key string, expiration int) error {
 }
 
 func (s *ServerWithTextProtocol) Set(item *Item) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	flags := uint32(0)
 	if len(item.Flags) == 4 {
 		flags = binary.BigEndian.Uint32(item.Flags)
@@ -363,6 +383,9 @@ func (s *ServerWithTextProtocol) Set(item *Item) error {
 }
 
 func (s *ServerWithTextProtocol) Add(item *Item) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	flags := uint32(0)
 	if len(item.Flags) == 4 {
 		flags = binary.BigEndian.Uint32(item.Flags)
@@ -388,6 +411,9 @@ func (s *ServerWithTextProtocol) Add(item *Item) error {
 }
 
 func (s *ServerWithTextProtocol) Replace(item *Item) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	flags := uint32(0)
 	if len(item.Flags) == 4 {
 		flags = binary.BigEndian.Uint32(item.Flags)
@@ -413,6 +439,9 @@ func (s *ServerWithTextProtocol) Replace(item *Item) error {
 }
 
 func (s *ServerWithTextProtocol) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if _, err := fmt.Fprint(s.conn, "flush_all\r\n"); err != nil {
 		return err
 	}
@@ -433,6 +462,9 @@ func (s *ServerWithTextProtocol) Flush() error {
 }
 
 func (s *ServerWithTextProtocol) Version() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if _, err := s.conn.WriteString("version\r\n"); err != nil {
 		return "", err
 	}
@@ -446,7 +478,7 @@ func (s *ServerWithTextProtocol) Version() (string, error) {
 	}
 
 	if len(b) > 0 {
-		return strings.TrimPrefix(string(b), "VERSION "), nil
+		return strings.TrimSuffix(strings.TrimPrefix(string(b), "VERSION "), "\r\n"), nil
 	}
 	return "", err
 }
@@ -459,6 +491,7 @@ type ServerWithMetaProtocol struct {
 
 	conn *bufio.ReadWriter
 	raw  net.Conn
+	mu   sync.Mutex
 }
 
 var _ Server = &ServerWithMetaProtocol{}
@@ -484,6 +517,9 @@ func (s *ServerWithMetaProtocol) Name() string {
 }
 
 func (s *ServerWithMetaProtocol) Get(key string) (*Item, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "mg %s svfct\r\n", key); err != nil {
 		return nil, err
 	}
@@ -500,6 +536,9 @@ func (s *ServerWithMetaProtocol) Get(key string) (*Item, error) {
 }
 
 func (s *ServerWithMetaProtocol) GetMulti(keys ...string) ([]*Item, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	items := make([]*Item, 0)
 	for _, key := range keys {
 		if _, err := fmt.Fprintf(s.conn, "mg %s svfkc\r\n", key); err != nil {
@@ -588,6 +627,9 @@ func (s *ServerWithMetaProtocol) parseGetResponse(conn *bufio.ReadWriter, flags 
 }
 
 func (s *ServerWithMetaProtocol) Set(item *Item) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	flags := "ST"
 	format := "%d %d"
 	values := []interface{}{item.Key, len(item.Value), item.Expiration}
@@ -625,6 +667,9 @@ func (s *ServerWithMetaProtocol) Set(item *Item) error {
 }
 
 func (s *ServerWithMetaProtocol) Add(item *Item) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	// FIXME: should use new text protocol
 	flags := uint32(0)
 	if len(item.Flags) == 4 {
@@ -651,6 +696,9 @@ func (s *ServerWithMetaProtocol) Add(item *Item) error {
 }
 
 func (s *ServerWithMetaProtocol) Replace(item *Item) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	// FIXME: should use new text protocol
 	flags := uint32(0)
 	if len(item.Flags) == 4 {
@@ -677,6 +725,9 @@ func (s *ServerWithMetaProtocol) Replace(item *Item) error {
 }
 
 func (s *ServerWithMetaProtocol) Delete(key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "md %s\r\n", key); err != nil {
 		return err
 	}
@@ -700,17 +751,20 @@ func (s *ServerWithMetaProtocol) Delete(key string) error {
 
 // Incr is increment value when if exist key.
 // implement is same as textProtocol.Incr.
-func (s *ServerWithMetaProtocol) Increment(key string, delta int) (int64, error) {
+func (s *ServerWithMetaProtocol) Increment(key string, delta, _ int) (int64, error) {
 	return s.incrOrDecr("incr", key, delta)
 }
 
 // Decr is decrement value when if exist key.
 // implement is same as textProtocol.Decr.
-func (s *ServerWithMetaProtocol) Decrement(key string, delta int) (int64, error) {
+func (s *ServerWithMetaProtocol) Decrement(key string, delta, _ int) (int64, error) {
 	return s.incrOrDecr("decr", key, delta)
 }
 
 func (s *ServerWithMetaProtocol) incrOrDecr(op, key string, delta int) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "%s %s %d\r\n", op, key, delta); err != nil {
 		return 0, err
 	}
@@ -735,6 +789,9 @@ func (s *ServerWithMetaProtocol) incrOrDecr(op, key string, delta int) (int64, e
 }
 
 func (s *ServerWithMetaProtocol) Touch(key string, expiration int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if _, err := fmt.Fprintf(s.conn, "md %s IT %d\r\n", key, expiration); err != nil {
 		return err
 	}
@@ -756,6 +813,9 @@ func (s *ServerWithMetaProtocol) Touch(key string, expiration int) error {
 }
 
 func (s *ServerWithMetaProtocol) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if _, err := fmt.Fprint(s.conn, "flush_all\r\n"); err != nil {
 		return err
 	}
@@ -776,6 +836,9 @@ func (s *ServerWithMetaProtocol) Flush() error {
 }
 
 func (s *ServerWithMetaProtocol) Version() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if _, err := s.conn.WriteString("version\r\n"); err != nil {
 		return "", err
 	}
@@ -788,7 +851,7 @@ func (s *ServerWithMetaProtocol) Version() (string, error) {
 		return "", err
 	}
 	if len(b) > 0 {
-		return strings.TrimPrefix(string(b), "VERSION "), nil
+		return strings.TrimSuffix(strings.TrimPrefix(string(b), "VERSION "), "\r\n"), nil
 	}
 
 	return "", nil
@@ -803,7 +866,9 @@ type ServerWithBinaryProtocol struct {
 	Network string
 	Addr    string
 	Type    ServerOperationType
+	Timeout time.Duration
 
+	mu   sync.Mutex
 	conn *bufio.ReadWriter
 	raw  net.Conn
 
@@ -840,6 +905,14 @@ func (s *ServerWithBinaryProtocol) Name() string {
 }
 
 func (s *ServerWithBinaryProtocol) Get(key string) (*Item, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	header := s.reqHeaderPool.Get().(*binaryRequestHeader)
 	defer s.reqHeaderPool.Put(header)
 	header.Reset()
@@ -888,6 +961,14 @@ func (s *ServerWithBinaryProtocol) Get(key string) (*Item, error) {
 }
 
 func (s *ServerWithBinaryProtocol) GetMulti(keys ...string) ([]*Item, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	items := make([]*Item, 0, len(keys))
 	header := s.reqHeaderPool.Get().(*binaryRequestHeader)
 	for _, key := range keys {
@@ -945,6 +1026,14 @@ func (s *ServerWithBinaryProtocol) GetMulti(keys ...string) ([]*Item, error) {
 }
 
 func (s *ServerWithBinaryProtocol) Set(item *Item) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	header := s.getReqHeader()
 	defer s.putReqHeader(header)
 
@@ -952,6 +1041,9 @@ func (s *ServerWithBinaryProtocol) Set(item *Item) error {
 	extra := item.marshalBinaryRequestHeader(header)
 	if err := header.EncodeTo(s.conn); err != nil {
 		return err
+	}
+	if item.Flags != nil {
+		copy(extra[:4], item.Flags[:4])
 	}
 	s.conn.Write(extra)
 	s.conn.Write([]byte(item.Key))
@@ -986,6 +1078,14 @@ func (s *ServerWithBinaryProtocol) Set(item *Item) error {
 }
 
 func (s *ServerWithBinaryProtocol) Add(item *Item) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	header := s.getReqHeader()
 	defer s.putReqHeader(header)
 
@@ -993,6 +1093,9 @@ func (s *ServerWithBinaryProtocol) Add(item *Item) error {
 	extra := item.marshalBinaryRequestHeader(header)
 	if err := header.EncodeTo(s.conn); err != nil {
 		return err
+	}
+	if item.Flags != nil {
+		copy(extra[:4], item.Flags[:4])
 	}
 	s.conn.Write(extra)
 	s.conn.Write([]byte(item.Key))
@@ -1027,6 +1130,14 @@ func (s *ServerWithBinaryProtocol) Add(item *Item) error {
 }
 
 func (s *ServerWithBinaryProtocol) Replace(item *Item) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	header := s.getReqHeader()
 	defer s.putReqHeader(header)
 
@@ -1034,6 +1145,9 @@ func (s *ServerWithBinaryProtocol) Replace(item *Item) error {
 	extra := item.marshalBinaryRequestHeader(header)
 	if err := header.EncodeTo(s.conn); err != nil {
 		return err
+	}
+	if item.Flags != nil {
+		copy(extra[:4], item.Flags[:4])
 	}
 	s.conn.Write(extra)
 	s.conn.Write([]byte(item.Key))
@@ -1073,6 +1187,14 @@ func (s *ServerWithBinaryProtocol) Replace(item *Item) error {
 }
 
 func (s *ServerWithBinaryProtocol) Delete(key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	header := s.reqHeaderPool.Get().(*binaryRequestHeader)
 	defer s.reqHeaderPool.Put(header)
 	header.Reset()
@@ -1118,19 +1240,27 @@ func (s *ServerWithBinaryProtocol) Delete(key string) error {
 	return nil
 }
 
-func (s *ServerWithBinaryProtocol) Increment(key string, delta int) (int64, error) {
-	return s.incrOrDecr(binaryOpcodeIncrement, key, delta)
+func (s *ServerWithBinaryProtocol) Increment(key string, delta, expiration int) (int64, error) {
+	return s.incrOrDecr(binaryOpcodeIncrement, key, delta, expiration)
 }
 
-func (s *ServerWithBinaryProtocol) Decrement(key string, delta int) (int64, error) {
-	return s.incrOrDecr(binaryOpcodeDecrement, key, delta)
+func (s *ServerWithBinaryProtocol) Decrement(key string, delta, expiration int) (int64, error) {
+	return s.incrOrDecr(binaryOpcodeDecrement, key, delta, expiration)
 }
 
-func (s *ServerWithBinaryProtocol) incrOrDecr(opcode byte, key string, delta int) (int64, error) {
+func (s *ServerWithBinaryProtocol) incrOrDecr(opcode byte, key string, delta int, expiration int) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	extra := make([]byte, 20)
 	binary.BigEndian.PutUint64(extra[:8], uint64(delta))
 	binary.BigEndian.PutUint64(extra[8:16], 1)
-	binary.BigEndian.PutUint32(extra[16:20], 600)
+	binary.BigEndian.PutUint32(extra[16:20], uint32(expiration))
 	header := s.reqHeaderPool.Get().(*binaryRequestHeader)
 	defer s.reqHeaderPool.Put(header)
 
@@ -1179,10 +1309,18 @@ func (s *ServerWithBinaryProtocol) incrOrDecr(opcode byte, key string, delta int
 		}
 	}
 
-	return int64(binary.BigEndian.Uint64(body)), nil
+	return strconv.ParseInt(string(body), 10, 64)
 }
 
 func (s *ServerWithBinaryProtocol) Touch(key string, expiration int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	extra := make([]byte, 4)
 	binary.BigEndian.PutUint32(extra, uint32(expiration))
 	header := s.reqHeaderPool.Get().(*binaryRequestHeader)
@@ -1221,6 +1359,14 @@ func (s *ServerWithBinaryProtocol) Touch(key string, expiration int) error {
 }
 
 func (s *ServerWithBinaryProtocol) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	header := s.getReqHeader()
 	defer s.putReqHeader(header)
 
@@ -1246,6 +1392,14 @@ func (s *ServerWithBinaryProtocol) Flush() error {
 }
 
 func (s *ServerWithBinaryProtocol) Version() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	header := s.getReqHeader()
 	defer s.putReqHeader(header)
 

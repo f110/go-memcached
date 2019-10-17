@@ -3,16 +3,12 @@ package client
 import (
 	"bytes"
 	"context"
-	"flag"
+	"fmt"
 	"log"
 	"testing"
+
+	"github.com/f110/go-memcached/testutil"
 )
-
-var memcachedHost = "localhost:11212"
-
-func init() {
-	flag.StringVar(&memcachedHost, "memcached-host", memcachedHost, "memcached host")
-}
 
 func newClient(t *testing.T, server Server) *SinglePool {
 	c, err := NewSinglePool(server)
@@ -23,24 +19,24 @@ func newClient(t *testing.T, server Server) *SinglePool {
 	return c
 }
 
-func newTextProtocolClient(t *testing.T) *SinglePool {
-	server, err := NewServerWithTextProtocol(context.Background(), "test", "tcp", memcachedHost)
+func newTextProtocolClient(t *testing.T, process *testutil.MemcachedProcess) *SinglePool {
+	server, err := NewServerWithTextProtocol(context.Background(), "test", "tcp", fmt.Sprintf("localhost:%d", process.Port))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return newClient(t, server)
 }
 
-func newMetaProtocolClient(t *testing.T) *SinglePool {
-	server, err := NewServerWithMetaProtocol(context.Background(), "test", "tcp", memcachedHost)
+func newMetaProtocolClient(t *testing.T, process *testutil.MemcachedProcess) *SinglePool {
+	server, err := NewServerWithMetaProtocol(context.Background(), "test", "tcp", fmt.Sprintf("localhost:%d", process.Port))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return newClient(t, server)
 }
 
-func newBinaryProtocolClient(t *testing.T) *SinglePool {
-	server, err := NewServerWithBinaryProtocol(context.Background(), "test", "tcp", memcachedHost)
+func newBinaryProtocolClient(t *testing.T, process *testutil.MemcachedProcess) *SinglePool {
+	server, err := NewServerWithBinaryProtocol(context.Background(), "test", "tcp", fmt.Sprintf("localhost:%d", process.Port))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,16 +63,19 @@ func TestClient_Get(t *testing.T) {
 		}
 	}
 
+	process := testutil.NewMemcachedProcess(t, nil)
+	defer process.Stop(t)
+
 	t.Run("TextProtocol", func(t *testing.T) {
-		testFn(t, newTextProtocolClient(t))
+		testFn(t, newTextProtocolClient(t, process))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
-		testFn(t, newMetaProtocolClient(t))
+		testFn(t, newMetaProtocolClient(t, process))
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		testFn(t, newBinaryProtocolClient(t))
+		testFn(t, newBinaryProtocolClient(t, process))
 	})
 }
 
@@ -129,19 +128,22 @@ func TestClient_Set(t *testing.T) {
 		}
 	}
 
+	process := testutil.NewMemcachedProcess(t, nil)
+	defer process.Stop(t)
+
 	t.Run("TextProtocol", func(t *testing.T) {
-		testFn(t, newTextProtocolClient(t))
-		testCasFn(t, newTextProtocolClient(t))
+		testFn(t, newTextProtocolClient(t, process))
+		testCasFn(t, newTextProtocolClient(t, process))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
-		testFn(t, newMetaProtocolClient(t))
-		testCasFn(t, newMetaProtocolClient(t))
+		testFn(t, newMetaProtocolClient(t, process))
+		testCasFn(t, newMetaProtocolClient(t, process))
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		testFn(t, newBinaryProtocolClient(t))
-		testCasFn(t, newBinaryProtocolClient(t))
+		testFn(t, newBinaryProtocolClient(t, process))
+		testCasFn(t, newBinaryProtocolClient(t, process))
 	})
 }
 
@@ -168,17 +170,20 @@ func TestClient_Add(t *testing.T) {
 		}
 	}
 
+	process := testutil.NewMemcachedProcess(t, nil)
+	defer process.Stop(t)
+
 	t.Run("TextProtocol", func(t *testing.T) {
-		testFn(t, newTextProtocolClient(t))
+		testFn(t, newTextProtocolClient(t, process))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
 		t.Skip("Not yet supported by meta command")
-		testFn(t, newMetaProtocolClient(t))
+		testFn(t, newMetaProtocolClient(t, process))
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		testFn(t, newBinaryProtocolClient(t))
+		testFn(t, newBinaryProtocolClient(t, process))
 	})
 }
 
@@ -217,17 +222,20 @@ func TestClient_Replace(t *testing.T) {
 		}
 	}
 
+	process := testutil.NewMemcachedProcess(t, nil)
+	defer process.Stop(t)
+
 	t.Run("TextProtocol", func(t *testing.T) {
-		testFn(t, newTextProtocolClient(t))
+		testFn(t, newTextProtocolClient(t, process))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
 		t.Skip("Not yet supported by meta command")
-		testFn(t, newMetaProtocolClient(t))
+		testFn(t, newMetaProtocolClient(t, process))
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		testFn(t, newBinaryProtocolClient(t))
+		testFn(t, newBinaryProtocolClient(t, process))
 	})
 }
 
@@ -259,16 +267,19 @@ func TestClient_GetMulti(t *testing.T) {
 		}
 	}
 
+	process := testutil.NewMemcachedProcess(t, nil)
+	defer process.Stop(t)
+
 	t.Run("TextProtocol", func(t *testing.T) {
-		testFn(t, newTextProtocolClient(t))
+		testFn(t, newTextProtocolClient(t, process))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
-		testFn(t, newMetaProtocolClient(t))
+		testFn(t, newMetaProtocolClient(t, process))
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		testFn(t, newBinaryProtocolClient(t))
+		testFn(t, newBinaryProtocolClient(t, process))
 	})
 }
 
@@ -294,16 +305,19 @@ func TestClient_Delete(t *testing.T) {
 		}
 	}
 
+	process := testutil.NewMemcachedProcess(t, nil)
+	defer process.Stop(t)
+
 	t.Run("TextProtocol", func(t *testing.T) {
-		testFn(t, newTextProtocolClient(t))
+		testFn(t, newTextProtocolClient(t, process))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
-		testFn(t, newMetaProtocolClient(t))
+		testFn(t, newMetaProtocolClient(t, process))
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		testFn(t, newBinaryProtocolClient(t))
+		testFn(t, newBinaryProtocolClient(t, process))
 	})
 }
 
@@ -323,16 +337,19 @@ func TestClient_Touch(t *testing.T) {
 		}
 	}
 
+	process := testutil.NewMemcachedProcess(t, nil)
+	defer process.Stop(t)
+
 	t.Run("TextProtocol", func(t *testing.T) {
-		testFn(t, newTextProtocolClient(t))
+		testFn(t, newTextProtocolClient(t, process))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
-		testFn(t, newMetaProtocolClient(t))
+		testFn(t, newMetaProtocolClient(t, process))
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		testFn(t, newBinaryProtocolClient(t))
+		testFn(t, newBinaryProtocolClient(t, process))
 	})
 }
 
@@ -351,16 +368,19 @@ func TestClient_Increment(t *testing.T) {
 		}
 	}
 
+	process := testutil.NewMemcachedProcess(t, nil)
+	defer process.Stop(t)
+
 	t.Run("TextProtocol", func(t *testing.T) {
-		testFn(t, newTextProtocolClient(t))
+		testFn(t, newTextProtocolClient(t, process))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
-		testFn(t, newMetaProtocolClient(t))
+		testFn(t, newMetaProtocolClient(t, process))
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		testFn(t, newBinaryProtocolClient(t))
+		testFn(t, newBinaryProtocolClient(t, process))
 	})
 }
 
@@ -385,16 +405,19 @@ func TestClient_Decrement(t *testing.T) {
 		}
 	}
 
+	process := testutil.NewMemcachedProcess(t, nil)
+	defer process.Stop(t)
+
 	t.Run("TextProtocol", func(t *testing.T) {
-		testFn(t, newTextProtocolClient(t))
+		testFn(t, newTextProtocolClient(t, process))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
-		testFn(t, newMetaProtocolClient(t))
+		testFn(t, newMetaProtocolClient(t, process))
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		testFn(t, newBinaryProtocolClient(t))
+		testFn(t, newBinaryProtocolClient(t, process))
 	})
 }
 
@@ -420,16 +443,19 @@ func TestClient_Flush(t *testing.T) {
 		}
 	}
 
+	process := testutil.NewMemcachedProcess(t, nil)
+	defer process.Stop(t)
+
 	t.Run("TextProtocol", func(t *testing.T) {
-		testFn(t, newTextProtocolClient(t))
+		testFn(t, newTextProtocolClient(t, process))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
-		testFn(t, newMetaProtocolClient(t))
+		testFn(t, newMetaProtocolClient(t, process))
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		testFn(t, newBinaryProtocolClient(t))
+		testFn(t, newBinaryProtocolClient(t, process))
 	})
 }
 
@@ -451,16 +477,19 @@ func TestClient_Version(t *testing.T) {
 		}
 	}
 
+	process := testutil.NewMemcachedProcess(t, nil)
+	defer process.Stop(t)
+
 	t.Run("TextProtocol", func(t *testing.T) {
-		testFn(t, newTextProtocolClient(t))
+		testFn(t, newTextProtocolClient(t, process))
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
-		testFn(t, newMetaProtocolClient(t))
+		testFn(t, newMetaProtocolClient(t, process))
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		testFn(t, newBinaryProtocolClient(t))
+		testFn(t, newBinaryProtocolClient(t, process))
 	})
 }
 
@@ -483,8 +512,11 @@ func Benchmark_Get(b *testing.B) {
 		}
 	}
 
+	process := testutil.NewMemcachedProcess(b, nil)
+	defer process.Stop(b)
+
 	b.Run("TextProtocol", func(b *testing.B) {
-		server, err := NewServerWithTextProtocol(context.Background(), "test", "tcp", memcachedHost)
+		server, err := NewServerWithTextProtocol(context.Background(), "test", "tcp", fmt.Sprintf("localhost:%d", process.Port))
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -497,7 +529,7 @@ func Benchmark_Get(b *testing.B) {
 	})
 
 	b.Run("MetaProtocol", func(b *testing.B) {
-		server, err := NewServerWithMetaProtocol(context.Background(), "test", "tcp", memcachedHost)
+		server, err := NewServerWithMetaProtocol(context.Background(), "test", "tcp", fmt.Sprintf("localhost:%d", process.Port))
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -510,7 +542,7 @@ func Benchmark_Get(b *testing.B) {
 	})
 
 	b.Run("BinaryProtocol", func(b *testing.B) {
-		server, err := NewServerWithBinaryProtocol(context.Background(), "test", "tcp", memcachedHost)
+		server, err := NewServerWithBinaryProtocol(context.Background(), "test", "tcp", fmt.Sprintf("localhost:%d", process.Port))
 		if err != nil {
 			b.Fatal(err)
 		}

@@ -9,9 +9,18 @@ type ReplicaPool struct {
 	secondary *client.Ring
 }
 
-func NewReplicaPool(primary, secondary []client.Server) *ReplicaPool {
-	primaryRing := client.NewRing(primary...)
-	secondaryRing := client.NewRing(secondary...)
+func NewReplicaPool(primary, secondary []*client.ServerWithMetaProtocol) *ReplicaPool {
+	primaries := make([]client.Server, len(primary))
+	for i := 0; i < len(primary); i++ {
+		primaries[i] = primary[i]
+	}
+	secondaries := make([]client.Server, len(secondary))
+	for i := 0; i < len(secondary); i++ {
+		secondaries[i] = secondary[i]
+	}
+	primaryRing := client.NewRing(primaries...)
+	secondaryRing := client.NewRing(secondaries...)
+
 	return &ReplicaPool{
 		primary:   primaryRing,
 		secondary: secondaryRing,

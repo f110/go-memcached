@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
-	"testing"
 	"time"
 )
 
@@ -47,7 +46,11 @@ type MemcachedProcess struct {
 	cmd  *exec.Cmd
 }
 
-func NewMemcachedProcess(t *testing.T, args []string) *MemcachedProcess {
+type testContext interface {
+	Fatal(...interface{})
+}
+
+func NewMemcachedProcess(t testContext, args []string) *MemcachedProcess {
 	if memcachedBinaryPath == "" {
 		p, err := exec.LookPath("memcached")
 		if err != nil {
@@ -84,7 +87,7 @@ func NewMemcachedProcess(t *testing.T, args []string) *MemcachedProcess {
 	return &MemcachedProcess{Port: port, cmd: cmd}
 }
 
-func (m *MemcachedProcess) Stop(t *testing.T) {
+func (m *MemcachedProcess) Stop(t testContext) {
 	if err := m.cmd.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}

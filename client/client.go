@@ -76,12 +76,12 @@ func (c *SinglePool) Delete(key string) error {
 	return c.ring.Pick(key).Delete(key)
 }
 
-func (c *SinglePool) Increment(key string, delta int) (int64, error) {
-	return c.ring.Pick(key).Increment(key, delta)
+func (c *SinglePool) Increment(key string, delta, expiration int) (int64, error) {
+	return c.ring.Pick(key).Increment(key, delta, expiration)
 }
 
-func (c *SinglePool) Decrement(key string, delta int) (int64, error) {
-	return c.ring.Pick(key).Decrement(key, delta)
+func (c *SinglePool) Decrement(key string, delta, expiration int) (int64, error) {
+	return c.ring.Pick(key).Decrement(key, delta, expiration)
 }
 
 func (c *SinglePool) Touch(key string, expiration int) error {
