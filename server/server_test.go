@@ -598,7 +598,7 @@ func TestServer_Serve(t *testing.T) {
 		t.Run("incr", func(t *testing.T) {
 			testServer.SetResponse([]*Response{
 				{
-					Value: []byte("1"),
+					Value: []byte{0, 0, 0, 0, 0, 0, 0, 0x01},
 				},
 			})
 
@@ -616,7 +616,7 @@ func TestServer_Serve(t *testing.T) {
 		t.Run("decr", func(t *testing.T) {
 			testServer.SetResponse([]*Response{
 				{
-					Value: []byte("9"),
+					Value: []byte{0, 0, 0, 0, 0, 0, 0, 0x09},
 				},
 			})
 

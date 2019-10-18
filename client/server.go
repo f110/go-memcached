@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -1309,7 +1310,8 @@ func (s *ServerWithBinaryProtocol) incrOrDecr(opcode byte, key string, delta int
 		}
 	}
 
-	return strconv.ParseInt(string(body), 10, 64)
+	log.Print(body)
+	return int64(binary.BigEndian.Uint64(body)), nil
 }
 
 func (s *ServerWithBinaryProtocol) Touch(key string, expiration int) error {
