@@ -359,7 +359,7 @@ func TestClient_Increment(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		newValue, err := c.Increment(t.Name(), 1)
+		newValue, err := c.Increment(t.Name(), 1, 10)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -396,7 +396,7 @@ func TestClient_Decrement(t *testing.T) {
 			t.Fatal()
 		}
 
-		newValue, err := c.Decrement(t.Name(), 1)
+		newValue, err := c.Decrement(t.Name(), 1, 10)
 		if err != nil {
 			t.Fatal(err)
 		}

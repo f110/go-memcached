@@ -122,7 +122,7 @@ func TestReplicaPool_Increment(t *testing.T) {
 	}
 
 	time.Sleep(1 * time.Second)
-	if n, err := replicaPool.Increment(t.Name(), 1); err != nil {
+	if n, err := replicaPool.Increment(t.Name(), 1, 10); err != nil {
 		t.Fatal(err)
 	} else {
 		if n != 2 {
@@ -156,7 +156,7 @@ func TestReplicaPool_Decrement(t *testing.T) {
 	}
 
 	time.Sleep(1 * time.Second)
-	if n, err := replicaPool.Decrement(t.Name(), 1); err != nil {
+	if n, err := replicaPool.Decrement(t.Name(), 1, 10); err != nil {
 		t.Fatal(err)
 	} else {
 		if n != 9 {

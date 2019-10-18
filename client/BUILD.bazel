@@ -1,0 +1,22 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "go_default_library",
+    srcs = [
+        "client.go",
+        "ring.go",
+        "server.go",
+    ],
+    importpath = "github.com/f110/go-memcached/client",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "go_default_test",
+    srcs = [
+        "client_test.go",
+        "ring_test.go",
+    ],
+    embed = [":go_default_library"],
+    deps = ["//testutil:go_default_library"],
+)

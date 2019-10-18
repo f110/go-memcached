@@ -85,9 +85,9 @@ func (p *ReplicaPool) Delete(key string) error {
 	return p.secondary.Pick(key).Delete(key)
 }
 
-func (p *ReplicaPool) Increment(key string, delta int) (int64, error) {
+func (p *ReplicaPool) Increment(key string, delta, expiration int) (int64, error) {
 	s := p.primary.Pick(key)
-	n, err := s.Increment(key, delta)
+	n, err := s.Increment(key, delta, expiration)
 	if err != nil {
 		return 0, err
 	}
@@ -107,9 +107,9 @@ func (p *ReplicaPool) Increment(key string, delta int) (int64, error) {
 	return n, nil
 }
 
-func (p *ReplicaPool) Decrement(key string, delta int) (int64, error) {
+func (p *ReplicaPool) Decrement(key string, delta, expiration int) (int64, error) {
 	s := p.primary.Pick(key)
-	n, err := s.Decrement(key, delta)
+	n, err := s.Decrement(key, delta, expiration)
 	if err != nil {
 		return 0, err
 	}
