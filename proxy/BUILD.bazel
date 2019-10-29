@@ -1,0 +1,14 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = ["replica_pool.go"],
+    importpath = "github.com/f110/go-memcached/proxy",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//client:go_default_library",
+        "//cluster:go_default_library",
+        "//errors:go_default_library",
+        "//server:go_default_library",
+    ],
+)

@@ -233,7 +233,7 @@ func (c *conn) readAsciiRequest() (*Request, error) {
 				switch f {
 				case 'C':
 					opt.Cas = true
-					v, err := strconv.ParseInt(tokens[0], 10, 64)
+					v, err := strconv.ParseUint(tokens[0], 10, 64)
 					if err != nil {
 						return nil, err
 					}
@@ -441,7 +441,7 @@ type SetOpt struct {
 	Meta        bool
 	RequestFlag string
 	Cas         bool
-	CasValue    int64
+	CasValue    uint64
 	Flag        int32
 	Invalidate  bool
 	Key         bool
@@ -510,7 +510,7 @@ func (s *Server) serve(conn *conn) error {
 func (s *Server) serveRequest(req *Request, conn *conn) error {
 	res, err := s.Handler.ServeRequest(req)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	return s.writeResponse(conn, req, res)

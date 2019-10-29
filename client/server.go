@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	merrors "github.com/f110/go-memcached/errors"
 )
 
 var (
@@ -72,11 +74,6 @@ var binaryStatus = map[uint16]string{
 	129: "unknown command",
 	130: "out of memory",
 }
-
-var (
-	ItemNotFound = errors.New("memcached: not found")
-	ItemExists   = errors.New("memcached: item exists")
-)
 
 type ServerOperationType string
 
@@ -153,7 +150,7 @@ func (s *ServerWithTextProtocol) Get(key string) (*Item, error) {
 		return nil, err
 	}
 	if bytes.Equal(b, msgTextProtoEnd) {
-		return nil, ItemNotFound
+		return nil, merrors.ItemNotFound
 	}
 	if !bytes.HasPrefix(b, []byte("VALUE")) {
 		return nil, errors.New("memcached: invalid response")
@@ -280,7 +277,7 @@ func (s *ServerWithTextProtocol) Delete(key string) error {
 	case bytes.Equal(b, msgTextProtoDeleted):
 		return nil
 	case bytes.Equal(b, msgTextProtoNotFound):
-		return ItemNotFound
+		return merrors.ItemNotFound
 	}
 	return nil
 }
@@ -310,7 +307,7 @@ func (s *ServerWithTextProtocol) incrOrDecr(op, key string, delta int) (int64, e
 
 	switch {
 	case bytes.Equal(b, msgTextProtoNotFound):
-		return 0, ItemNotFound
+		return 0, merrors.ItemNotFound
 	default:
 		i, err := strconv.ParseInt(string(b[:len(b)-2]), 10, 64)
 		if err != nil {
@@ -339,7 +336,7 @@ func (s *ServerWithTextProtocol) Touch(key string, expiration int) error {
 	case bytes.Equal(b, msgTextProtoTouched):
 		return nil
 	case bytes.Equal(b, msgTextProtoNotFound):
-		return ItemNotFound
+		return merrors.ItemNotFound
 	}
 
 	return nil
@@ -377,7 +374,7 @@ func (s *ServerWithTextProtocol) Set(item *Item) error {
 	case bytes.Equal(buf, msgTextProtoStored):
 		return nil
 	case bytes.Equal(buf, msgTextProtoExists):
-		return ItemExists
+		return merrors.ItemExists
 	default:
 		return fmt.Errorf("memcached: failed set: %s", string(buf))
 	}
@@ -408,7 +405,7 @@ func (s *ServerWithTextProtocol) Add(item *Item) error {
 		return nil
 	}
 
-	return ItemExists
+	return merrors.ItemExists
 }
 
 func (s *ServerWithTextProtocol) Replace(item *Item) error {
@@ -436,7 +433,7 @@ func (s *ServerWithTextProtocol) Replace(item *Item) error {
 		return nil
 	}
 
-	return ItemNotFound
+	return merrors.ItemNotFound
 }
 
 func (s *ServerWithTextProtocol) Flush() error {
@@ -556,7 +553,7 @@ MultiRead:
 		item, err := s.parseGetResponse(s.conn, "svfkc")
 		if err != nil {
 			switch err {
-			case ItemNotFound:
+			case merrors.ItemNotFound:
 				break MultiRead
 			default:
 				return nil, err
@@ -574,7 +571,7 @@ func (s *ServerWithMetaProtocol) parseGetResponse(conn *bufio.ReadWriter, flags 
 		return nil, err
 	}
 	if bytes.Equal(b, msgMetaProtoEnd) {
-		return nil, ItemNotFound
+		return nil, merrors.ItemNotFound
 	}
 	if !bytes.HasPrefix(b, []byte("VA")) {
 		return nil, errors.New("memcached: invalid get response")
@@ -621,6 +618,7 @@ func (s *ServerWithMetaProtocol) parseGetResponse(conn *bufio.ReadWriter, flags 
 		return nil, err
 	}
 	if !bytes.Equal(b, msgMetaProtoEnd) {
+		log.Print(2)
 		return nil, errors.New("memcached: invalid get response")
 	}
 
@@ -661,7 +659,7 @@ func (s *ServerWithMetaProtocol) Set(item *Item) error {
 	case bytes.HasPrefix(b, msgMetaProtoStored):
 		return nil
 	case bytes.HasPrefix(b, msgMetaProtoExists):
-		return ItemExists
+		return merrors.ItemExists
 	}
 
 	return errors.New("memcached: failed set")
@@ -693,7 +691,7 @@ func (s *ServerWithMetaProtocol) Add(item *Item) error {
 		return nil
 	}
 
-	return ItemExists
+	return merrors.ItemExists
 }
 
 func (s *ServerWithMetaProtocol) Replace(item *Item) error {
@@ -722,7 +720,7 @@ func (s *ServerWithMetaProtocol) Replace(item *Item) error {
 		return nil
 	}
 
-	return ItemNotFound
+	return merrors.ItemNotFound
 }
 
 func (s *ServerWithMetaProtocol) Delete(key string) error {
@@ -779,7 +777,7 @@ func (s *ServerWithMetaProtocol) incrOrDecr(op, key string, delta int) (int64, e
 
 	switch {
 	case bytes.Equal(b, msgTextProtoNotFound):
-		return 0, ItemNotFound
+		return 0, merrors.ItemNotFound
 	default:
 		i, err := strconv.ParseInt(string(b[:len(b)-2]), 10, 64)
 		if err != nil {
@@ -945,7 +943,7 @@ func (s *ServerWithBinaryProtocol) Get(key string) (*Item, error) {
 		if v, ok := binaryStatus[resHeader.Status]; ok {
 			switch resHeader.Status {
 			case 1: // key not found
-				return nil, ItemNotFound
+				return nil, merrors.ItemNotFound
 			default:
 				return nil, fmt.Errorf("memcached: error %s", v)
 			}
@@ -1065,7 +1063,7 @@ func (s *ServerWithBinaryProtocol) Set(item *Item) error {
 	if resHeader.Status != 0 {
 		switch resHeader.Status {
 		case 2: // key exists
-			return ItemExists
+			return merrors.ItemExists
 		default:
 			if v, ok := binaryStatus[resHeader.Status]; ok {
 				return fmt.Errorf("memcached: error %s", v)
@@ -1117,7 +1115,7 @@ func (s *ServerWithBinaryProtocol) Add(item *Item) error {
 	if resHeader.Status != 0 {
 		switch resHeader.Status {
 		case 2:
-			return ItemExists
+			return merrors.ItemExists
 		default:
 			if v, ok := binaryStatus[resHeader.Status]; ok {
 				return fmt.Errorf("memcached: error %s", v)
@@ -1174,7 +1172,7 @@ func (s *ServerWithBinaryProtocol) Replace(item *Item) error {
 	if resHeader.Status != 0 {
 		switch resHeader.Status {
 		case 1:
-			return ItemNotFound
+			return merrors.ItemNotFound
 		default:
 			if v, ok := binaryStatus[resHeader.Status]; ok {
 				return fmt.Errorf("memcached: error %s", v)
@@ -1228,7 +1226,7 @@ func (s *ServerWithBinaryProtocol) Delete(key string) error {
 	if resHeader.Status != 0 {
 		switch resHeader.Status {
 		case 1: // key not found
-			return ItemNotFound
+			return merrors.ItemNotFound
 		default:
 			if v, ok := binaryStatus[resHeader.Status]; ok {
 				return fmt.Errorf("memcached: error %s", v)
