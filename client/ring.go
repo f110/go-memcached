@@ -86,6 +86,29 @@ func (r *Ring) Each(fn func(s Server) error) error {
 	return nil
 }
 
+func (r *Ring) Next(key string) Server {
+	h := crc32.ChecksumIEEE([]byte(key))
+
+	lower := 0
+	upper := len(r.nodes) - 1
+Search:
+	for lower <= upper {
+		idx := (lower + upper) / 2
+
+		t := r.nodes[idx].hash
+		switch {
+		case t == h:
+			break Search
+		case h < t:
+			upper = idx - 1
+		case t < h:
+			lower = idx + 1
+		}
+	}
+
+	return r.nodes[upper+1].Server
+}
+
 func (r *Ring) Close() error {
 	var e error
 	for _, v := range r.servers {

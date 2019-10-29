@@ -75,11 +75,12 @@ var binaryStatus = map[uint16]string{
 	130: "out of memory",
 }
 
-type ServerOperationType string
+type ServerState string
 
 const (
-	ServerDeleteOnly ServerOperationType = "delete_only"
-	ServerWriteOnly  ServerOperationType = "write_only"
+	ServerStateNormal     ServerState = "normal"
+	ServerStateDeleteOnly ServerState = "delete_only"
+	ServerStateWriteOnly  ServerState = "write_only"
 )
 
 type Server interface {
@@ -96,17 +97,18 @@ type Server interface {
 	Touch(key string, expiration int) error
 	Flush() error
 	Version() (string, error)
+	State() ServerState
 }
 
 type ServerWithTextProtocol struct {
 	name    string
 	Network string
 	Addr    string
-	Type    ServerOperationType
 
-	conn *bufio.ReadWriter
-	raw  net.Conn
-	mu   sync.Mutex
+	state ServerState
+	conn  *bufio.ReadWriter
+	raw   net.Conn
+	mu    sync.Mutex
 }
 
 var _ Server = &ServerWithTextProtocol{}
@@ -481,15 +483,19 @@ func (s *ServerWithTextProtocol) Version() (string, error) {
 	return "", err
 }
 
+func (s *ServerWithTextProtocol) State() ServerState {
+	return s.state
+}
+
 type ServerWithMetaProtocol struct {
 	name    string
 	Network string
 	Addr    string
-	Type    ServerOperationType
 
-	conn *bufio.ReadWriter
-	raw  net.Conn
-	mu   sync.Mutex
+	state ServerState
+	conn  *bufio.ReadWriter
+	raw   net.Conn
+	mu    sync.Mutex
 }
 
 var _ Server = &ServerWithMetaProtocol{}
@@ -856,6 +862,10 @@ func (s *ServerWithMetaProtocol) Version() (string, error) {
 	return "", nil
 }
 
+func (s *ServerWithMetaProtocol) State() ServerState {
+	return s.state
+}
+
 func (s *ServerWithMetaProtocol) Close() error {
 	return s.raw.Close()
 }
@@ -864,12 +874,12 @@ type ServerWithBinaryProtocol struct {
 	name    string
 	Network string
 	Addr    string
-	Type    ServerOperationType
 	Timeout time.Duration
 
-	mu   sync.Mutex
-	conn *bufio.ReadWriter
-	raw  net.Conn
+	state ServerState
+	mu    sync.Mutex
+	conn  *bufio.ReadWriter
+	raw   net.Conn
 
 	reqHeaderPool *sync.Pool
 	resHeaderPool *sync.Pool
@@ -1430,6 +1440,10 @@ func (s *ServerWithBinaryProtocol) Version() (string, error) {
 	}
 
 	return string(buf), nil
+}
+
+func (s *ServerWithBinaryProtocol) State() ServerState {
+	return s.state
 }
 
 func (s *ServerWithBinaryProtocol) Close() error {
