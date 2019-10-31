@@ -15,9 +15,10 @@ import (
 )
 
 type Server struct {
-	Name string `json:"name"`
-	Host string `json:"host"`
-	Port int    `json:"port"`
+	Name  string `json:"name"`
+	Host  string `json:"host"`
+	Port  int    `json:"port"`
+	Phase string `json:"phase"`
 }
 
 type Config struct {
@@ -28,7 +29,20 @@ type Config struct {
 func connectServers(servers []Server) []*client.ServerWithMetaProtocol {
 	res := make([]*client.ServerWithMetaProtocol, len(servers))
 	for i := range servers {
-		s, err := client.NewServerWithMetaProtocol(context.Background(), servers[i].Name, "tcp", fmt.Sprintf("%s:%d", servers[i].Host, servers[i].Port))
+		state := client.ServerStateNormal
+		switch servers[i].Phase {
+		case "delete_only":
+			state = client.ServerStateDeleteOnly
+		case "write_only":
+			state = client.ServerStateWriteOnly
+		}
+		s, err := client.NewServerWithMetaProtocol(
+			context.Background(),
+			servers[i].Name,
+			"tcp",
+			fmt.Sprintf("%s:%d", servers[i].Host, servers[i].Port),
+			state,
+		)
 		if err != nil {
 			panic(err)
 		}

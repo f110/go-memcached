@@ -1,0 +1,8 @@
+primary:
+  - name: primary-1
+    host: 127.0.0.1
+    port: 11212
+  - name: primary-2
+    host: 127.0.0.1
+    port: 11212
+    phase: delete_only

@@ -113,7 +113,7 @@ type ServerWithTextProtocol struct {
 
 var _ Server = &ServerWithTextProtocol{}
 
-func NewServerWithTextProtocol(ctx context.Context, name, network, addr string) (*ServerWithTextProtocol, error) {
+func NewServerWithTextProtocol(ctx context.Context, name, network, addr string, state ServerState) (*ServerWithTextProtocol, error) {
 	d := &net.Dialer{}
 	conn, err := d.DialContext(ctx, network, addr)
 	if err != nil {
@@ -126,6 +126,7 @@ func NewServerWithTextProtocol(ctx context.Context, name, network, addr string) 
 		Addr:    addr,
 		conn:    bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
 		raw:     conn,
+		state:   state,
 	}, nil
 }
 
@@ -500,7 +501,7 @@ type ServerWithMetaProtocol struct {
 
 var _ Server = &ServerWithMetaProtocol{}
 
-func NewServerWithMetaProtocol(ctx context.Context, name, network, addr string) (*ServerWithMetaProtocol, error) {
+func NewServerWithMetaProtocol(ctx context.Context, name, network, addr string, state ServerState) (*ServerWithMetaProtocol, error) {
 	d := &net.Dialer{}
 	conn, err := d.DialContext(ctx, network, addr)
 	if err != nil {
@@ -513,6 +514,7 @@ func NewServerWithMetaProtocol(ctx context.Context, name, network, addr string) 
 		Addr:    addr,
 		conn:    bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
 		raw:     conn,
+		state:   state,
 	}, nil
 }
 
@@ -887,7 +889,7 @@ type ServerWithBinaryProtocol struct {
 
 var _ Server = &ServerWithBinaryProtocol{}
 
-func NewServerWithBinaryProtocol(ctx context.Context, name, network, addr string) (*ServerWithBinaryProtocol, error) {
+func NewServerWithBinaryProtocol(ctx context.Context, name, network, addr string, state ServerState) (*ServerWithBinaryProtocol, error) {
 	d := &net.Dialer{}
 	conn, err := d.DialContext(ctx, network, addr)
 	if err != nil {
@@ -900,6 +902,7 @@ func NewServerWithBinaryProtocol(ctx context.Context, name, network, addr string
 		Addr:    addr,
 		conn:    bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
 		raw:     conn,
+		state:   state,
 		reqHeaderPool: &sync.Pool{New: func() interface{} {
 			return newBinaryRequestHeader()
 		}},
