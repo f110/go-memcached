@@ -3,7 +3,7 @@ load("@bazel_gazelle//:def.bzl", "gazelle")
 # gazelle:prefix github.com/f110/go-memcached
 gazelle(name = "gazelle")
 
-load("@rules_foreign_cc//tools/build_defs:configure.bzl", "configure_make")
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "configure_make")
 
 configure_make(
     name = "libevent",
@@ -13,15 +13,12 @@ configure_make(
         "--disable-openssl",
     ],
     lib_source = "@libevent//:all",
-    configure_env_vars = {
-        "AR": "",
-    },
 )
 
 configure_make(
     name = "memcached",
     lib_source = "@memcached//:all",
     deps = ["libevent"],
-    binaries = ["memcached"],
+    out_binaries = ["memcached"],
     install_prefix = "build",
 )
