@@ -7,6 +7,7 @@ import (
 	"log"
 	"testing"
 
+	merrors "github.com/f110/go-memcached/errors"
 	"github.com/f110/go-memcached/testutil"
 )
 
@@ -123,7 +124,7 @@ func TestClient_Set(t *testing.T) {
 
 		if err := c.Set(&Item{Key: t.Name(), Value: []byte("foo"), Cas: casUnique}); err == nil {
 			t.Errorf("unexpected error: %v", err)
-		} else if err != ItemExists {
+		} else if err != merrors.ItemExists {
 			t.Errorf("expect item exists: %v", err)
 		}
 	}
@@ -155,7 +156,7 @@ func TestClient_Add(t *testing.T) {
 			}
 		}()
 
-		if err := c.Delete(t.Name()); err != nil && err != ItemNotFound {
+		if err := c.Delete(t.Name()); err != nil && err != merrors.ItemNotFound {
 			t.Fatal(err)
 		}
 
@@ -165,7 +166,7 @@ func TestClient_Add(t *testing.T) {
 		}
 
 		err = c.Add(&Item{Key: t.Name(), Value: []byte("fail")})
-		if err != ItemExists {
+		if err != merrors.ItemExists {
 			t.Errorf("expect item exists error: %v", err)
 		}
 	}
@@ -195,12 +196,12 @@ func TestClient_Replace(t *testing.T) {
 			}
 		}()
 
-		if err := c.Delete(t.Name()); err != nil && err != ItemNotFound {
+		if err := c.Delete(t.Name()); err != nil && err != merrors.ItemNotFound {
 			t.Fatal(err)
 		}
 
 		err := c.Replace(&Item{Key: t.Name(), Value: []byte("fail")})
-		if err != ItemNotFound {
+		if err != merrors.ItemNotFound {
 			t.Fatalf("expect item not found error: %v", err)
 		}
 
@@ -300,7 +301,7 @@ func TestClient_Delete(t *testing.T) {
 		}
 
 		_, err := c.Get(t.Name())
-		if err != ItemNotFound {
+		if err != merrors.ItemNotFound {
 			t.Fatal(err)
 		}
 	}
@@ -438,7 +439,7 @@ func TestClient_Flush(t *testing.T) {
 		}
 
 		_, err := c.Get(t.Name())
-		if err == nil || err != ItemNotFound {
+		if err == nil || err != merrors.ItemNotFound {
 			t.Fatal("expect item not found")
 		}
 	}
