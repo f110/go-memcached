@@ -33,11 +33,13 @@ var (
 )
 
 var (
-	msgMetaProtoEnd      = []byte("EN\r\n")
-	msgMetaProtoStored   = []byte("ST ")
-	msgMetaProtoDeleted  = []byte("DE ")
-	msgMetaProtoExists   = []byte("EX ")
-	msgMetaProtoNotFound = []byte("NF ")
+	msgMetaProtoEnd       = []byte("EN\r\n")
+	msgMetaProtoNoop      = []byte("MN\r\n")
+	msgMetaProtoStored    = []byte("HD")
+	msgMetaProtoNotStored = []byte("NS")
+	msgMetaProtoDeleted   = []byte("HD")
+	msgMetaProtoExists    = []byte("EX")
+	msgMetaProtoNotFound  = []byte("NF")
 )
 
 var (
@@ -518,14 +520,14 @@ func (s *ServerWithMetaProtocol) Get(key string) (*Item, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, err := fmt.Fprintf(s.conn, "mg %s svfct\r\n", key); err != nil {
+	if _, err := fmt.Fprintf(s.conn, "mg %s v f c\r\n", key); err != nil {
 		return nil, err
 	}
 	if err := s.conn.Flush(); err != nil {
 		return nil, err
 	}
 
-	item, err := s.parseGetResponse(s.conn, "svfct")
+	item, err := s.parseGetResponse(s.conn, "vfc")
 	if err != nil {
 		return nil, err
 	}
@@ -539,7 +541,7 @@ func (s *ServerWithMetaProtocol) GetMulti(keys ...string) ([]*Item, error) {
 
 	items := make([]*Item, 0)
 	for _, key := range keys {
-		if _, err := fmt.Fprintf(s.conn, "mg %s svfkc\r\n", key); err != nil {
+		if _, err := fmt.Fprintf(s.conn, "mg %s v f k c\r\n", key); err != nil {
 			return nil, err
 		}
 	}
@@ -550,7 +552,7 @@ func (s *ServerWithMetaProtocol) GetMulti(keys ...string) ([]*Item, error) {
 
 MultiRead:
 	for {
-		item, err := s.parseGetResponse(s.conn, "svfkc")
+		item, err := s.parseGetResponse(s.conn, "vfkc")
 		if err != nil {
 			switch err {
 			case merrors.ItemNotFound:
@@ -573,34 +575,35 @@ func (s *ServerWithMetaProtocol) parseGetResponse(conn *bufio.ReadWriter, flags 
 	if bytes.Equal(b, msgMetaProtoEnd) {
 		return nil, merrors.ItemNotFound
 	}
+	if bytes.Equal(b, msgMetaProtoNoop) {
+		return nil, merrors.ItemNotFound
+	}
 	if !bytes.HasPrefix(b, []byte("VA")) {
 		return nil, errors.New("memcached: invalid get response")
 	}
 	item := &Item{}
 	size := 0
 	scan := make([]interface{}, 0, len(flags))
-	format := ""
+	format := " %d"
+	scan = append(scan, &size)
 	var flag uint32
 	for _, t := range flags {
 		switch t {
-		case 's':
-			scan = append(scan, &size)
-			format += " %d"
 		case 'f':
 			scan = append(scan, &flag)
-			format += " %d"
+			format += " f%d"
 		case 'k':
 			scan = append(scan, &item.Key)
-			format += " %s"
+			format += " k%s"
 		case 'c':
 			scan = append(scan, &item.Cas)
-			format += " %d"
+			format += " c%d"
 		case 't':
 			scan = append(scan, &item.Expiration)
-			format += " %d"
+			format += " t%d"
 		}
 	}
-	if _, err := fmt.Fscanf(bytes.NewReader(b), "VA "+flags+format, scan...); err != nil {
+	if _, err := fmt.Fscanf(bytes.NewReader(b), "VA"+format, scan...); err != nil {
 		return nil, err
 	}
 	f := make([]byte, 4)
@@ -613,15 +616,6 @@ func (s *ServerWithMetaProtocol) parseGetResponse(conn *bufio.ReadWriter, flags 
 	}
 	item.Value = buf[:size]
 
-	b, err = conn.ReadSlice('\n')
-	if err != nil {
-		return nil, err
-	}
-	if !bytes.Equal(b, msgMetaProtoEnd) {
-		log.Print(2)
-		return nil, errors.New("memcached: invalid get response")
-	}
-
 	return item, nil
 }
 
@@ -629,20 +623,17 @@ func (s *ServerWithMetaProtocol) Set(item *Item) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	flags := "ST"
-	format := "%d %d"
+	format := "%s %d T%d" // ms <key> <datalen> TTL
 	values := []interface{}{item.Key, len(item.Value), item.Expiration}
 	if item.Cas > 0 {
-		flags += "C"
-		format += " %d"
+		format += " C%d"
 		values = append(values, item.Cas)
 	}
 	if item.Flags != nil {
-		flags += "F"
-		format += " %d"
+		format += " F%d"
 		values = append(values, binary.BigEndian.Uint32(item.Flags))
 	}
-	if _, err := fmt.Fprintf(s.conn, "ms %s "+flags+" "+format+"\r\n", values...); err != nil {
+	if _, err := fmt.Fprintf(s.conn, "ms "+format+"\r\n", values...); err != nil {
 		return err
 	}
 	if _, err := s.conn.Write(append(item.Value, crlf...)); err != nil {
@@ -658,10 +649,15 @@ func (s *ServerWithMetaProtocol) Set(item *Item) error {
 	switch {
 	case bytes.HasPrefix(b, msgMetaProtoStored):
 		return nil
+	case bytes.HasPrefix(b, msgMetaProtoNotStored):
+		return errors.New("memcached: not stored")
 	case bytes.HasPrefix(b, msgMetaProtoExists):
 		return merrors.ItemExists
+	case bytes.HasPrefix(b, msgMetaProtoNotFound):
+		return merrors.ItemNotFound
 	}
 
+	log.Print(string(b))
 	return errors.New("memcached: failed set")
 }
 
@@ -743,18 +739,20 @@ func (s *ServerWithMetaProtocol) Delete(key string) error {
 		return nil
 	case bytes.HasPrefix(b, msgMetaProtoNotFound):
 		return nil
+	case bytes.HasPrefix(b, msgMetaProtoExists):
+		return merrors.ItemNotFound
 	default:
 		return errors.New("memcached: failed delete")
 	}
 }
 
-// Incr is increment value when if exist key.
+// Increment is increment value when if exist key.
 // implement is same as textProtocol.Incr.
 func (s *ServerWithMetaProtocol) Increment(key string, delta, _ int) (int64, error) {
 	return s.incrOrDecr("incr", key, delta)
 }
 
-// Decr is decrement value when if exist key.
+// Decrement is decrement value when if exist key.
 // implement is same as textProtocol.Decr.
 func (s *ServerWithMetaProtocol) Decrement(key string, delta, _ int) (int64, error) {
 	return s.incrOrDecr("decr", key, delta)
@@ -791,7 +789,7 @@ func (s *ServerWithMetaProtocol) Touch(key string, expiration int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, err := fmt.Fprintf(s.conn, "md %s IT %d\r\n", key, expiration); err != nil {
+	if _, err := fmt.Fprintf(s.conn, "md %s I T%d\r\n", key, expiration); err != nil {
 		return err
 	}
 	if err := s.conn.Flush(); err != nil {
@@ -1308,7 +1306,6 @@ func (s *ServerWithBinaryProtocol) incrOrDecr(opcode byte, key string, delta int
 		}
 	}
 
-	log.Print(body)
 	return int64(binary.BigEndian.Uint64(body)), nil
 }
 

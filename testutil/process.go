@@ -48,6 +48,7 @@ type MemcachedProcess struct {
 
 type testContext interface {
 	Fatal(...interface{})
+	Log(...interface{})
 }
 
 func NewMemcachedProcess(t testContext, args []string) *MemcachedProcess {
