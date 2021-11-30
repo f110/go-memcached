@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
 	"testing"
 
 	merrors "go.f110.dev/go-memcached/errors"
@@ -45,14 +44,14 @@ func newBinaryProtocolClient(t *testing.T, process *testutil.MemcachedProcess) *
 }
 
 func TestClient_Get(t *testing.T) {
-	testFn := func(t *testing.T, c *SinglePool) {
+	testFn := func(t *testing.T, c *SinglePool, testExpiration bool) {
 		defer func() {
 			if err := c.Close(); err != nil {
 				t.Fatal(err)
 			}
 		}()
 
-		if err := c.Set(&Item{Key: t.Name(), Value: []byte("FOOBAR")}); err != nil {
+		if err := c.Set(&Item{Key: t.Name(), Value: []byte("FOOBAR"), Expiration: 90}); err != nil {
 			t.Fatal(err)
 		}
 		item, err := c.Get(t.Name())
@@ -62,21 +61,24 @@ func TestClient_Get(t *testing.T) {
 		if !bytes.Equal(item.Value, []byte("FOOBAR")) {
 			t.Errorf("unexpected value: %v", item.Value)
 		}
+		if testExpiration && item.Expiration < 88 {
+			t.Errorf("the expiration is too short: %d", item.Expiration)
+		}
 	}
 
 	process := testutil.NewMemcachedProcess(t, nil)
 	defer process.Stop(t)
 
 	t.Run("TextProtocol", func(t *testing.T) {
-		testFn(t, newTextProtocolClient(t, process))
+		testFn(t, newTextProtocolClient(t, process), false)
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
-		testFn(t, newMetaProtocolClient(t, process))
+		testFn(t, newMetaProtocolClient(t, process), true)
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		testFn(t, newBinaryProtocolClient(t, process))
+		testFn(t, newBinaryProtocolClient(t, process), false)
 	})
 }
 
@@ -241,17 +243,17 @@ func TestClient_Replace(t *testing.T) {
 }
 
 func TestClient_GetMulti(t *testing.T) {
-	testFn := func(t *testing.T, c *SinglePool) {
+	testFn := func(t *testing.T, c *SinglePool, testExpiration bool) {
 		defer func() {
 			if err := c.Close(); err != nil {
 				t.Fatal(err)
 			}
 		}()
 
-		if err := c.Set(&Item{Key: "test", Value: []byte("OK1")}); err != nil {
+		if err := c.Set(&Item{Key: "test", Value: []byte("OK1"), Expiration: 90}); err != nil {
 			t.Fatal(err)
 		}
-		if err := c.Set(&Item{Key: "client", Value: []byte("OK2")}); err != nil {
+		if err := c.Set(&Item{Key: "client", Value: []byte("OK2"), Expiration: 90}); err != nil {
 			t.Fatal(err)
 		}
 
@@ -263,8 +265,8 @@ func TestClient_GetMulti(t *testing.T) {
 		if len(items) != 2 {
 			t.Fatalf("expected returing 2 items: %d", len(items))
 		}
-		for _, v := range items {
-			log.Print(v.Key)
+		if testExpiration && (items[0].Expiration < 88 || items[1].Expiration < 88) {
+			t.Errorf("the expiration is too short: %d %d", items[0].Expiration, items[1].Expiration)
 		}
 	}
 
@@ -272,15 +274,15 @@ func TestClient_GetMulti(t *testing.T) {
 	defer process.Stop(t)
 
 	t.Run("TextProtocol", func(t *testing.T) {
-		testFn(t, newTextProtocolClient(t, process))
+		testFn(t, newTextProtocolClient(t, process), false)
 	})
 
 	t.Run("MetaProtocol", func(t *testing.T) {
-		testFn(t, newMetaProtocolClient(t, process))
+		testFn(t, newMetaProtocolClient(t, process), true)
 	})
 
 	t.Run("BinaryProtocol", func(t *testing.T) {
-		testFn(t, newBinaryProtocolClient(t, process))
+		testFn(t, newBinaryProtocolClient(t, process), false)
 	})
 }
 

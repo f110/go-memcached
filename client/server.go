@@ -520,14 +520,14 @@ func (s *ServerWithMetaProtocol) Get(key string) (*Item, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, err := fmt.Fprintf(s.conn, "mg %s v f c\r\n", key); err != nil {
+	if _, err := fmt.Fprintf(s.conn, "mg %s v f c t\r\n", key); err != nil {
 		return nil, err
 	}
 	if err := s.conn.Flush(); err != nil {
 		return nil, err
 	}
 
-	item, err := s.parseGetResponse(s.conn, "vfc")
+	item, err := s.parseGetResponse(s.conn, "vfct")
 	if err != nil {
 		return nil, err
 	}
@@ -541,7 +541,7 @@ func (s *ServerWithMetaProtocol) GetMulti(keys ...string) ([]*Item, error) {
 
 	items := make([]*Item, 0)
 	for _, key := range keys {
-		if _, err := fmt.Fprintf(s.conn, "mg %s v f k c\r\n", key); err != nil {
+		if _, err := fmt.Fprintf(s.conn, "mg %s v f k c t\r\n", key); err != nil {
 			return nil, err
 		}
 	}
@@ -552,7 +552,7 @@ func (s *ServerWithMetaProtocol) GetMulti(keys ...string) ([]*Item, error) {
 
 MultiRead:
 	for {
-		item, err := s.parseGetResponse(s.conn, "vfkc")
+		item, err := s.parseGetResponse(s.conn, "vfkct")
 		if err != nil {
 			switch err {
 			case merrors.ItemNotFound:
