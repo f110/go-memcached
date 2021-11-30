@@ -7,7 +7,7 @@ go_library(
         "ring.go",
         "server.go",
     ],
-    importpath = "github.com/f110/go-memcached/client",
+    importpath = "go.f110.dev/go-memcached/client",
     visibility = ["//visibility:public"],
     deps = ["//errors:go_default_library"],
 )
@@ -19,5 +19,8 @@ go_test(
         "ring_test.go",
     ],
     embed = [":go_default_library"],
-    deps = ["//testutil:go_default_library"],
+    deps = [
+        "//errors:go_default_library",
+        "//testutil:go_default_library",
+    ],
 )

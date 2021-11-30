@@ -3,10 +3,10 @@ package proxy
 import (
 	"errors"
 
-	"github.com/f110/go-memcached/client"
-	"github.com/f110/go-memcached/cluster"
-	merrors "github.com/f110/go-memcached/errors"
-	"github.com/f110/go-memcached/server"
+	"go.f110.dev/go-memcached/client"
+	"go.f110.dev/go-memcached/cluster"
+	merrors "go.f110.dev/go-memcached/errors"
+	"go.f110.dev/go-memcached/server"
 )
 
 type ReplicaProxy struct {

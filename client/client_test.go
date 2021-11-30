@@ -7,8 +7,8 @@ import (
 	"log"
 	"testing"
 
-	merrors "github.com/f110/go-memcached/errors"
-	"github.com/f110/go-memcached/testutil"
+	merrors "go.f110.dev/go-memcached/errors"
+	"go.f110.dev/go-memcached/testutil"
 )
 
 func newClient(t *testing.T, server Server) *SinglePool {

@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	merrors "github.com/f110/go-memcached/errors"
+	merrors "go.f110.dev/go-memcached/errors"
 )
 
 var (

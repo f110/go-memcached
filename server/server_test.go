@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/f110/go-memcached/client"
+	"go.f110.dev/go-memcached/client"
 )
 
 type testHandler struct {

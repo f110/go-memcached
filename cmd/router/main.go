@@ -7,11 +7,12 @@ import (
 	"io/ioutil"
 	"log"
 
-	"github.com/f110/go-memcached/client"
-	"github.com/f110/go-memcached/cluster"
-	"github.com/f110/go-memcached/proxy"
-	"github.com/f110/go-memcached/server"
 	"sigs.k8s.io/yaml"
+
+	"go.f110.dev/go-memcached/client"
+	"go.f110.dev/go-memcached/cluster"
+	"go.f110.dev/go-memcached/proxy"
+	"go.f110.dev/go-memcached/server"
 )
 
 type Server struct {

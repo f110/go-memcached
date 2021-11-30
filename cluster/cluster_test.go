@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/f110/go-memcached/client"
-	"github.com/f110/go-memcached/testutil"
+	"go.f110.dev/go-memcached/client"
+	"go.f110.dev/go-memcached/testutil"
 )
 
 type testReplicaPool struct {

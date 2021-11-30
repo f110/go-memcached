@@ -3,7 +3,7 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library")
 go_library(
     name = "go_default_library",
     srcs = ["replica_pool.go"],
-    importpath = "github.com/f110/go-memcached/proxy",
+    importpath = "go.f110.dev/go-memcached/proxy",
     visibility = ["//visibility:public"],
     deps = [
         "//client:go_default_library",

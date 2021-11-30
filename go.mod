@@ -1,4 +1,4 @@
-module github.com/f110/go-memcached
+module go.f110.dev/go-memcached
 
 go 1.13
 

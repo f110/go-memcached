@@ -1,7 +1,7 @@
 package cluster
 
 import (
-	"github.com/f110/go-memcached/client"
+	"go.f110.dev/go-memcached/client"
 )
 
 type ReplicaPool struct {
