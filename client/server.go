@@ -527,7 +527,7 @@ func (s *ServerWithMetaProtocol) Get(key string) (*Item, error) {
 		return nil, err
 	}
 
-	item, err := s.parseGetResponse(s.conn, "vfct")
+	item, err := s.parseGetResponse(s.conn)
 	if err != nil {
 		return nil, err
 	}
@@ -552,7 +552,7 @@ func (s *ServerWithMetaProtocol) GetMulti(keys ...string) ([]*Item, error) {
 
 MultiRead:
 	for {
-		item, err := s.parseGetResponse(s.conn, "vfkct")
+		item, err := s.parseGetResponse(s.conn)
 		if err != nil {
 			switch err {
 			case merrors.ItemNotFound:
@@ -567,7 +567,7 @@ MultiRead:
 	return items, nil
 }
 
-func (s *ServerWithMetaProtocol) parseGetResponse(conn *bufio.ReadWriter, flags string) (*Item, error) {
+func (s *ServerWithMetaProtocol) parseGetResponse(conn *bufio.ReadWriter) (*Item, error) {
 	b, err := conn.ReadSlice('\n')
 	if err != nil {
 		return nil, err
@@ -581,34 +581,48 @@ func (s *ServerWithMetaProtocol) parseGetResponse(conn *bufio.ReadWriter, flags 
 	if !bytes.HasPrefix(b, []byte("VA")) {
 		return nil, errors.New("memcached: invalid get response")
 	}
+
 	item := &Item{}
 	size := 0
-	scan := make([]interface{}, 0, len(flags))
-	format := " %d"
-	scan = append(scan, &size)
-	var flag uint32
-	for _, t := range flags {
-		switch t {
-		case 'f':
-			scan = append(scan, &flag)
-			format += " f%d"
-		case 'k':
-			scan = append(scan, &item.Key)
-			format += " k%s"
-		case 'c':
-			scan = append(scan, &item.Cas)
-			format += " c%d"
-		case 't':
-			scan = append(scan, &item.Expiration)
-			format += " t%d"
+	// state:
+	//    1 - Reading size
+	//    2 - Reading flag name
+	//    3 - Reading token
+	state := 1 // Read size
+	var flagName byte
+	var startIndex int
+	for i := range b[3:] {
+		switch b[3+i] {
+		case ' ':
+			switch state {
+			case 1: // Reading size
+				s, err := strconv.ParseInt(string(b[3:3+i]), 10, 32)
+				if err != nil {
+					return nil, err
+				}
+				size = int(s)
+				state = 2
+			case 3: // Reading token
+				if err := s.readGetFlagToken(flagName, b[startIndex:3+i], item); err != nil {
+					return nil, err
+				}
+				state = 2
+			}
+		case '\r':
+			if state == 3 {
+				if err := s.readGetFlagToken(flagName, b[startIndex:3+i], item); err != nil {
+					return nil, err
+				}
+			}
+		case 'f', 'c', 't', 'k':
+			switch state {
+			case 2:
+				flagName = b[3+i]
+				state = 3
+				startIndex = 3 + i + 1
+			}
 		}
 	}
-	if _, err := fmt.Fscanf(bytes.NewReader(b), "VA"+format, scan...); err != nil {
-		return nil, err
-	}
-	f := make([]byte, 4)
-	binary.BigEndian.PutUint32(f, flag)
-	item.Flags = f
 
 	buf := make([]byte, size+2)
 	if _, err := io.ReadFull(conn, buf); err != nil {
@@ -617,6 +631,35 @@ func (s *ServerWithMetaProtocol) parseGetResponse(conn *bufio.ReadWriter, flags 
 	item.Value = buf[:size]
 
 	return item, nil
+}
+
+func (s *ServerWithMetaProtocol) readGetFlagToken(flagName byte, v []byte, item *Item) error {
+	switch flagName {
+	case 'f':
+		in, err := strconv.ParseInt(string(v), 10, 32)
+		if err != nil {
+			return err
+		}
+		f := make([]byte, 4)
+		binary.BigEndian.PutUint32(f, uint32(in))
+		item.Flags = f
+	case 'c':
+		in, err := strconv.ParseInt(string(v), 10, 64)
+		if err != nil {
+			return err
+		}
+		item.Cas = uint64(in)
+	case 't':
+		in, err := strconv.ParseInt(string(v), 10, 32)
+		if err != nil {
+			return err
+		}
+		item.Expiration = int(in)
+	case 'k':
+		item.Key = string(v)
+	}
+
+	return nil
 }
 
 func (s *ServerWithMetaProtocol) Set(item *Item) error {
