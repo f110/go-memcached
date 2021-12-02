@@ -23,5 +23,9 @@ configure_make(
     out_include_dir = "",
     out_binaries = ["memcached"],
     deps = ["libevent"],
+    configure_options = [
+        "CXXFLAGS=\"\"",
+        "CFLAGS=\"\"",
+    ],
     visibility = ["//visibility:public"],
 )
