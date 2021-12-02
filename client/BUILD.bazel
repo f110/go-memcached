@@ -23,4 +23,7 @@ go_test(
         "//errors:go_default_library",
         "//testutil:go_default_library",
     ],
+    data = [
+        "//:memcached",
+    ],
 )

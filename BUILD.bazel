@@ -11,14 +11,17 @@ configure_make(
         "--enable-shared=no",
         "--disable-libevent-regress",
         "--disable-openssl",
+        "AR=\"\"",
     ],
     lib_source = "@libevent//:all",
 )
 
 configure_make(
     name = "memcached",
-    install_prefix = "build",
+    install_prefix = "install",
     lib_source = "@memcached//:all",
+    out_include_dir = "",
     out_binaries = ["memcached"],
     deps = ["libevent"],
+    visibility = ["//visibility:public"],
 )

@@ -52,9 +52,9 @@ http_archive(
 http_archive(
     name = "memcached",
     build_file_content = all_content,
-    strip_prefix = "memcached-1.5.19",
-    sha256 = "3ddcdaa2d14d215f3111a7448b79c889c57618a26e97ad989581f1880a5a4be0",
-    urls = ["http://www.memcached.org/files/memcached-1.5.19.tar.gz"],
+    strip_prefix = "memcached-1.6.12",
+    sha256 = "f291a35f82ef9756ed1d952879ef5f4be870f932bdfcb2ab61356609abf82346",
+    urls = ["http://www.memcached.org/files/memcached-1.6.12.tar.gz"],
 )
 
 go_repository(

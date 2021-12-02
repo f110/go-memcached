@@ -1,11 +1,16 @@
 package testutil
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -53,11 +58,22 @@ type testContext interface {
 
 func NewMemcachedProcess(t testContext, args []string) *MemcachedProcess {
 	if memcachedBinaryPath == "" {
-		p, err := exec.LookPath("memcached")
-		if err != nil {
-			t.Fatal(err)
+		if os.Getenv("RUN_UNDER_RUNFILES") != "" {
+			// Running under the sandbox of Bazel
+			filepath.Walk(os.Getenv("RUNFILES_DIR"), func(path string, info fs.FileInfo, err error) error {
+				if strings.HasSuffix(path, "bin/memcached") {
+					memcachedBinaryPath = path
+					return errors.New("found")
+				}
+				return nil
+			})
+		} else {
+			p, err := exec.LookPath("memcached")
+			if err != nil {
+				t.Fatal(err)
+			}
+			memcachedBinaryPath = p
 		}
-		memcachedBinaryPath = p
 	}
 
 	port, err := portFounder.Find()
