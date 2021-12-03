@@ -52,8 +52,8 @@ var (
 
 var (
 	metaProtoEnd     = []byte("EN\r\n")
-	metaProtoStored  = []byte("ST ")
-	metaProtoDeleted = []byte("DE ")
+	metaProtoStored  = []byte("HD")
+	metaProtoDeleted = []byte("HD")
 )
 
 var crlf = []byte("\r\n")
@@ -189,7 +189,7 @@ func (c *conn) readAsciiRequest() (*Request, error) {
 		case "touch":
 			opcode = OpcodeTouch
 		}
-		return &Request{Opcode: opcode, Key: s[1], Delta: int64(d)}, nil
+		return &Request{Opcode: opcode, Key: s[1], Delta: d}, nil
 	case "mg":
 		if len(s) < 3 {
 			return nil, errors.New("server: invalid request")
@@ -227,52 +227,51 @@ func (c *conn) readAsciiRequest() (*Request, error) {
 			return nil, errors.New("server: invalid request")
 		}
 		tokens := s[3:]
-		opt := &SetOpt{Meta: true, RequestFlag: s[2]}
+		v, err := strconv.ParseUint(s[2], 10, 32)
+		if err != nil {
+			return nil, err
+		}
+		opt := &SetOpt{Meta: true, Size: int(v)}
 		if len(s[2]) > 0 {
-			for _, f := range s[2] {
-				switch f {
+			for _, f := range tokens {
+				switch f[0] {
 				case 'C':
 					opt.Cas = true
-					v, err := strconv.ParseUint(tokens[0], 10, 64)
+					v, err := strconv.ParseUint(f[1:], 10, 64)
 					if err != nil {
 						return nil, err
 					}
 					opt.CasValue = v
-					tokens = tokens[1:]
 				case 'F':
-					v, err := strconv.ParseInt(tokens[0], 10, 32)
+					v, err := strconv.ParseInt(f[1:], 10, 32)
 					if err != nil {
 						return nil, err
 					}
 					opt.Flag = int32(v)
-					tokens = tokens[1:]
 				case 'I':
 					opt.Invalidate = true
 				case 'k':
 					opt.Key = true
 				case 'O':
-					v, err := strconv.ParseInt(tokens[0], 10, 64)
+					v, err := strconv.ParseInt(f[1:], 10, 64)
 					if err != nil {
 						return nil, err
 					}
 					opt.Opaque = v
-					tokens = tokens[1:]
 				case 'q':
 					opt.NoReply = true
 				case 'S':
-					v, err := strconv.ParseInt(tokens[0], 10, 32)
+					v, err := strconv.ParseInt(f[1:], 10, 32)
 					if err != nil {
 						return nil, err
 					}
 					opt.Size = int(v)
-					tokens = tokens[1:]
 				case 'T':
-					v, err := strconv.ParseInt(tokens[0], 10, 32)
+					v, err := strconv.ParseInt(f[1:], 10, 32)
 					if err != nil {
 						return nil, err
 					}
 					opt.Expiration = int(v)
-					tokens = tokens[1:]
 				}
 			}
 		}
@@ -438,17 +437,16 @@ type GetOpt struct {
 }
 
 type SetOpt struct {
-	Meta        bool
-	RequestFlag string
-	Cas         bool
-	CasValue    uint64
-	Flag        int32
-	Invalidate  bool
-	Key         bool
-	Opaque      int64
-	NoReply     bool
-	Size        int
-	Expiration  int
+	Meta       bool
+	Cas        bool
+	CasValue   uint64
+	Flag       int32
+	Invalidate bool
+	Key        bool
+	Opaque     int64
+	NoReply    bool
+	Size       int
+	Expiration int
 }
 
 type DelOpt struct {
@@ -546,7 +544,9 @@ func (s *Server) writeAsciiResponse(conn *conn, req *Request, res []*Response) e
 					return err
 				}
 			}
-			conn.connBuf.Write(metaProtoEnd)
+			if len(res) == 0 {
+				conn.connBuf.Write(metaProtoEnd)
+			}
 			if err := conn.connBuf.Flush(); err != nil {
 				return err
 			}
@@ -648,7 +648,8 @@ func (s *Server) writeAsciiResponseMetaGet(conn *conn, req *Request, r *Response
 		flag = binary.BigEndian.Uint32(r.Flags)
 	}
 	_, err := conn.connBuf.WriteString(
-		fmt.Sprintf("VA %s",
+		fmt.Sprintf("VA %d %s",
+			len(r.Value),
 			req.GetOpt.RequestFlag,
 		),
 	)

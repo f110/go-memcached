@@ -35,6 +35,8 @@ func (h *testHandler) SetResponse(res []*Response) {
 }
 
 func matchRequest(t *testing.T, ch chan *Request, expect *Request) {
+	t.Helper()
+
 	var req *Request
 	select {
 	case req = <-ch:
@@ -76,14 +78,16 @@ func matchRequest(t *testing.T, ch chan *Request, expect *Request) {
 }
 
 func matchItem(t *testing.T, res *client.Item, expect *client.Item) {
+	t.Helper()
+
 	if res.Key != expect.Key {
-		t.Errorf("unexpected key: %s", res.Key)
+		t.Errorf("unexpected key. expect:%s actual:%s", expect.Key, res.Key)
 	}
 	if res.Expiration != expect.Expiration {
 		t.Errorf("unexpected expiration: %d", res.Expiration)
 	}
 	if len(expect.Value) > 0 && len(expect.Value) != len(res.Value) {
-		t.Error("mismatch value length")
+		t.Errorf("mismatch value length. expect:%d actual:%d", len(expect.Value), len(res.Value))
 	}
 	if len(expect.Value) > 0 && !bytes.Equal(res.Value, expect.Value) {
 		t.Error("unexpected value")
@@ -112,10 +116,6 @@ func TestServer_Serve(t *testing.T) {
 
 	t.Run("TextProtocol", func(t *testing.T) {
 		c, err := client.NewServerWithTextProtocol(context.Background(), "test", "tcp", fmt.Sprintf("localhost:%d", addr.Port))
-		if err != nil {
-			t.Fatal(err)
-		}
-		m, err := client.NewServerWithMetaProtocol(context.Background(), "test", "tcp", fmt.Sprintf("localhost:%d", addr.Port))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -353,6 +353,37 @@ func TestServer_Serve(t *testing.T) {
 			)
 		})
 
+		t.Run("version", func(t *testing.T) {
+			testServer.SetResponse([]*Response{
+				{
+					Value: []byte("VERSION test"),
+				},
+			})
+
+			v, err := c.Version()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			matchRequest(
+				t,
+				reqCh,
+				&Request{
+					Opcode: OpcodeVersion,
+				},
+			)
+			if v != "test" {
+				t.Error("unexpected value")
+			}
+		})
+	})
+
+	t.Run("MetaProtocol", func(t *testing.T) {
+		m, err := client.NewServerWithMetaProtocol(context.Background(), "test", "tcp", fmt.Sprintf("localhost:%d", addr.Port))
+		if err != nil {
+			t.Fatal(err)
+		}
+
 		t.Run("meta get", func(t *testing.T) {
 			testServer.SetResponse([]*Response{
 				{
@@ -361,7 +392,7 @@ func TestServer_Serve(t *testing.T) {
 				},
 			})
 
-			_, err := m.Get(t.Name())
+			res, err := m.Get(t.Name())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -374,6 +405,7 @@ func TestServer_Serve(t *testing.T) {
 					Key:    t.Name(),
 				},
 			)
+			matchItem(t, res, &client.Item{Key: t.Name(), Value: []byte("meta get")})
 		})
 
 		t.Run("meta set", func(t *testing.T) {

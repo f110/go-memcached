@@ -53,6 +53,7 @@ type MemcachedProcess struct {
 
 type testContext interface {
 	Fatal(...interface{})
+	Fatalf(string, ...interface{})
 	Log(...interface{})
 }
 
@@ -67,13 +68,14 @@ func NewMemcachedProcess(t testContext, args []string) *MemcachedProcess {
 				}
 				return nil
 			})
-		} else {
-			p, err := exec.LookPath("memcached")
-			if err != nil {
-				t.Fatal(err)
-			}
-			memcachedBinaryPath = p
 		}
+	}
+	if memcachedBinaryPath == "" {
+		p, err := exec.LookPath("memcached")
+		if err != nil {
+			t.Fatal(err)
+		}
+		memcachedBinaryPath = p
 	}
 
 	port, err := portFounder.Find()
@@ -86,7 +88,7 @@ func NewMemcachedProcess(t testContext, args []string) *MemcachedProcess {
 	}
 	cmd := exec.Command(memcachedBinaryPath, arg...)
 	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
+		t.Fatalf("%s: %v", memcachedBinaryPath, err)
 	}
 
 	ticker := time.NewTicker(10 * time.Millisecond)
