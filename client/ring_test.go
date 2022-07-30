@@ -24,4 +24,9 @@ func TestRing_Pick(t *testing.T) {
 	if s.Name() != "fourth" {
 		t.Errorf("expect pick fourth server: %s", s.Name())
 	}
+
+	t.Run("Pick first node", func(t *testing.T) {
+		r := NewRing(&ServerWithMetaProtocol{name: "local"})
+		r.Pick("test999999999")
+	})
 }
