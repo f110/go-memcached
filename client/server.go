@@ -105,6 +105,7 @@ type ServerWithTextProtocol struct {
 	Network string
 	Addr    string
 	Type    ServerOperationType
+	Timeout time.Duration
 
 	conn *bufio.ReadWriter
 	raw  net.Conn
@@ -140,6 +141,11 @@ func (s *ServerWithTextProtocol) Close() error {
 func (s *ServerWithTextProtocol) Get(key string) (*Item, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
 
 	if _, err := fmt.Fprintf(s.conn, "gets %s\r\n", key); err != nil {
 		return nil, err
@@ -193,6 +199,11 @@ func (s *ServerWithTextProtocol) Get(key string) (*Item, error) {
 func (s *ServerWithTextProtocol) GetMulti(keys ...string) ([]*Item, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
 
 	items := make([]*Item, 0, len(keys))
 	if _, err := fmt.Fprintf(s.conn, "gets %s\r\n", strings.Join(keys, " ")); err != nil {
@@ -264,6 +275,11 @@ func (s *ServerWithTextProtocol) Delete(key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	if _, err := fmt.Fprintf(s.conn, "delete %s\r\n", key); err != nil {
 		return err
 	}
@@ -296,6 +312,11 @@ func (s *ServerWithTextProtocol) incrOrDecr(op, key string, delta int) (int64, e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	if _, err := fmt.Fprintf(s.conn, "%s %s %d\r\n", op, key, delta); err != nil {
 		return 0, err
 	}
@@ -323,6 +344,11 @@ func (s *ServerWithTextProtocol) Touch(key string, expiration int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	if _, err := fmt.Fprintf(s.conn, "touch %s %d\r\n", key, expiration); err != nil {
 		return err
 	}
@@ -347,6 +373,11 @@ func (s *ServerWithTextProtocol) Touch(key string, expiration int) error {
 func (s *ServerWithTextProtocol) Set(item *Item) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
 
 	flags := uint32(0)
 	if len(item.Flags) == 4 {
@@ -386,6 +417,11 @@ func (s *ServerWithTextProtocol) Add(item *Item) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	flags := uint32(0)
 	if len(item.Flags) == 4 {
 		flags = binary.BigEndian.Uint32(item.Flags)
@@ -413,6 +449,11 @@ func (s *ServerWithTextProtocol) Add(item *Item) error {
 func (s *ServerWithTextProtocol) Replace(item *Item) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
 
 	flags := uint32(0)
 	if len(item.Flags) == 4 {
@@ -442,6 +483,11 @@ func (s *ServerWithTextProtocol) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	if _, err := fmt.Fprint(s.conn, "flush_all\r\n"); err != nil {
 		return err
 	}
@@ -464,6 +510,11 @@ func (s *ServerWithTextProtocol) Flush() error {
 func (s *ServerWithTextProtocol) Version() (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
 
 	if _, err := s.conn.WriteString("version\r\n"); err != nil {
 		return "", err
