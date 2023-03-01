@@ -7,7 +7,7 @@ import (
 	"io/ioutil"
 	"log"
 
-	"sigs.k8s.io/yaml"
+	"gopkg.in/yaml.v3"
 
 	"go.f110.dev/go-memcached/client"
 	"go.f110.dev/go-memcached/cluster"
@@ -16,14 +16,14 @@ import (
 )
 
 type Server struct {
-	Name string `json:"name"`
-	Host string `json:"host"`
-	Port int    `json:"port"`
+	Name string `yaml:"name"`
+	Host string `yaml:"host"`
+	Port int    `yaml:"port"`
 }
 
 type Config struct {
-	Primary   []Server `json:"primary"`
-	Secondary []Server `json:"secondary"`
+	Primary   []Server `yaml:"primary"`
+	Secondary []Server `yaml:"secondary"`
 }
 
 func connectServers(servers []Server) []*client.ServerWithMetaProtocol {

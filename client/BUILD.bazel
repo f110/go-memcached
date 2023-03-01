@@ -18,12 +18,12 @@ go_test(
         "client_test.go",
         "ring_test.go",
     ],
+    data = [
+        "//:memcached",
+    ],
     embed = [":go_default_library"],
     deps = [
         "//errors:go_default_library",
         "//testutil:go_default_library",
-    ],
-    data = [
-        "//:memcached",
     ],
 )

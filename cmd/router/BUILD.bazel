@@ -10,7 +10,7 @@ go_library(
         "//cluster:go_default_library",
         "//proxy:go_default_library",
         "//server:go_default_library",
-        "@io_k8s_sigs_yaml//:go_default_library",
+        "@in_gopkg_yaml_v3//:go_default_library",
     ],
 )
 
