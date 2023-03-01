@@ -1,6 +1,6 @@
 module go.f110.dev/go-memcached
 
-go 1.18
+go 1.20
 
 require sigs.k8s.io/yaml v1.1.0
 
