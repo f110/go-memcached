@@ -11,12 +11,12 @@ go_library(
 go_test(
     name = "go_default_test",
     srcs = ["cluster_test.go"],
+    data = [
+        "//:memcached",
+    ],
     embed = [":go_default_library"],
     deps = [
         "//client:go_default_library",
         "//testutil:go_default_library",
-    ],
-    data = [
-        "//:memcached",
     ],
 )

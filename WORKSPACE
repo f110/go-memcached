@@ -33,6 +33,13 @@ go_register_toolchains(version = "1.20.1")
 
 load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies", "go_repository")
 
+go_repository(
+    name = "in_gopkg_yaml_v3",
+    importpath = "gopkg.in/yaml.v3",
+    sum = "h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=",
+    version = "v3.0.1",
+)
+
 gazelle_dependencies()
 
 load("@rules_foreign_cc//foreign_cc:repositories.bzl", "rules_foreign_cc_dependencies")
@@ -44,16 +51,16 @@ all_content = """filegroup(name = "all", srcs = glob(["**"]), visibility = ["//v
 http_archive(
     name = "libevent",
     build_file_content = all_content,
-    strip_prefix = "libevent-2.1.8-stable",
     sha256 = "965cc5a8bb46ce4199a47e9b2c9e1cae3b137e8356ffdad6d94d3b9069b71dc2",
+    strip_prefix = "libevent-2.1.8-stable",
     urls = ["https://github.com/libevent/libevent/releases/download/release-2.1.8-stable/libevent-2.1.8-stable.tar.gz"],
 )
 
 http_archive(
     name = "memcached",
     build_file_content = all_content,
-    strip_prefix = "memcached-1.6.12",
     sha256 = "f291a35f82ef9756ed1d952879ef5f4be870f932bdfcb2ab61356609abf82346",
+    strip_prefix = "memcached-1.6.12",
     urls = ["http://www.memcached.org/files/memcached-1.6.12.tar.gz"],
 )
 
@@ -62,18 +69,4 @@ go_repository(
     importpath = "gopkg.in/check.v1",
     sum = "h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=",
     version = "v0.0.0-20161208181325-20d25e280405",
-)
-
-go_repository(
-    name = "in_gopkg_yaml_v2",
-    importpath = "gopkg.in/yaml.v2",
-    sum = "h1:/eiJrUcujPVeJ3xlSWaiNi3uSVmDGBK1pDHUHAnao1I=",
-    version = "v2.2.4",
-)
-
-go_repository(
-    name = "io_k8s_sigs_yaml",
-    importpath = "sigs.k8s.io/yaml",
-    sum = "h1:4A07+ZFc2wgJwo8YNlQpr1rVlgUDlxXHhPJciaPY5gs=",
-    version = "v1.1.0",
 )

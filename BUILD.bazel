@@ -3,6 +3,15 @@ load("@bazel_gazelle//:def.bzl", "gazelle")
 # gazelle:prefix go.f110.dev/go-memcached
 gazelle(name = "gazelle")
 
+gazelle(
+    name = "gazelle-update-repos",
+    args = [
+        "-from_file=go.mod",
+        "-prune",
+    ],
+    command = "update-repos",
+)
+
 load("@rules_foreign_cc//foreign_cc:defs.bzl", "configure_make")
 
 configure_make(
@@ -18,14 +27,14 @@ configure_make(
 
 configure_make(
     name = "memcached",
-    install_prefix = "install",
-    lib_source = "@memcached//:all",
-    out_include_dir = "",
-    out_binaries = ["memcached"],
-    deps = ["libevent"],
     configure_options = [
         "CXXFLAGS=\"\"",
         "CFLAGS=\"\"",
     ],
+    install_prefix = "install",
+    lib_source = "@memcached//:all",
+    out_binaries = ["memcached"],
+    out_include_dir = "",
     visibility = ["//visibility:public"],
+    deps = ["libevent"],
 )
