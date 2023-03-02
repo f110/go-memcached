@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -49,6 +50,7 @@ func (p *portGovernor) Find() (int, error) {
 type MemcachedProcess struct {
 	Port int
 	cmd  *exec.Cmd
+	args []string
 }
 
 type testContext interface {
@@ -82,19 +84,27 @@ func NewMemcachedProcess(t testContext, args []string) *MemcachedProcess {
 	if err != nil {
 		t.Fatal(err)
 	}
-	arg := []string{"-p", strconv.Itoa(port)}
-	if args != nil {
-		arg = append(arg, args...)
+
+	p := &MemcachedProcess{Port: port, args: args}
+	p.start(t)
+	return p
+}
+
+func (m *MemcachedProcess) start(t testContext) {
+	arg := []string{"-p", strconv.Itoa(m.Port)}
+	if m.args != nil {
+		arg = append(arg, m.args...)
 	}
 	cmd := exec.Command(memcachedBinaryPath, arg...)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("%s: %v", memcachedBinaryPath, err)
 	}
+	m.cmd = cmd
 
 	ticker := time.NewTicker(10 * time.Millisecond)
 	for {
 		<-ticker.C
-		conn, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", port))
+		conn, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", m.Port))
 		if err != nil {
 			continue
 		}
@@ -102,8 +112,6 @@ func NewMemcachedProcess(t testContext, args []string) *MemcachedProcess {
 		break
 	}
 	ticker.Stop()
-
-	return &MemcachedProcess{Port: port, cmd: cmd}
 }
 
 func (m *MemcachedProcess) Stop(t testContext) {
@@ -114,4 +122,15 @@ func (m *MemcachedProcess) Stop(t testContext) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func (m *MemcachedProcess) Restart(t testContext) {
+	if err := m.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	_, err := m.cmd.Process.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.start(t)
 }

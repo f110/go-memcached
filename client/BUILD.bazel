@@ -17,6 +17,7 @@ go_test(
     srcs = [
         "client_test.go",
         "ring_test.go",
+        "server_test.go",
     ],
     data = [
         "//:memcached",
