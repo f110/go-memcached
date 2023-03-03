@@ -539,6 +539,7 @@ type ServerWithMetaProtocol struct {
 	Network string
 	Addr    string
 	Type    ServerOperationType
+	Timeout time.Duration
 
 	conn *bufio.ReadWriter
 	raw  net.Conn
@@ -571,6 +572,11 @@ func (s *ServerWithMetaProtocol) Get(key string) (*Item, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	if _, err := fmt.Fprintf(s.conn, "mg %s v f c t\r\n", key); err != nil {
 		return nil, err
 	}
@@ -589,6 +595,11 @@ func (s *ServerWithMetaProtocol) Get(key string) (*Item, error) {
 func (s *ServerWithMetaProtocol) GetMulti(keys ...string) ([]*Item, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
 
 	items := make([]*Item, 0)
 	for _, key := range keys {
@@ -717,6 +728,11 @@ func (s *ServerWithMetaProtocol) Set(item *Item) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	format := "%s %d T%d" // ms <key> <datalen> TTL
 	values := []interface{}{item.Key, len(item.Value), item.Expiration}
 	if item.Cas > 0 {
@@ -759,6 +775,11 @@ func (s *ServerWithMetaProtocol) Add(item *Item) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	// FIXME: should use new text protocol
 	flags := uint32(0)
 	if len(item.Flags) == 4 {
@@ -788,6 +809,11 @@ func (s *ServerWithMetaProtocol) Replace(item *Item) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	// FIXME: should use new text protocol
 	flags := uint32(0)
 	if len(item.Flags) == 4 {
@@ -816,6 +842,11 @@ func (s *ServerWithMetaProtocol) Replace(item *Item) error {
 func (s *ServerWithMetaProtocol) Delete(key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
 
 	if _, err := fmt.Fprintf(s.conn, "md %s\r\n", key); err != nil {
 		return err
@@ -856,6 +887,11 @@ func (s *ServerWithMetaProtocol) incrOrDecr(op, key string, delta int) (int64, e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	if _, err := fmt.Fprintf(s.conn, "%s %s %d\r\n", op, key, delta); err != nil {
 		return 0, err
 	}
@@ -883,6 +919,11 @@ func (s *ServerWithMetaProtocol) Touch(key string, expiration int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	if _, err := fmt.Fprintf(s.conn, "md %s I T%d\r\n", key, expiration); err != nil {
 		return err
 	}
@@ -907,6 +948,11 @@ func (s *ServerWithMetaProtocol) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.Timeout != 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
+
 	if _, err := fmt.Fprint(s.conn, "flush_all\r\n"); err != nil {
 		return err
 	}
@@ -929,6 +975,11 @@ func (s *ServerWithMetaProtocol) Flush() error {
 func (s *ServerWithMetaProtocol) Version() (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.Timeout > 0 {
+		s.raw.SetWriteDeadline(time.Now().Add(s.Timeout))
+		s.raw.SetReadDeadline(time.Now().Add(s.Timeout))
+	}
 
 	if _, err := s.conn.WriteString("version\r\n"); err != nil {
 		return "", err
