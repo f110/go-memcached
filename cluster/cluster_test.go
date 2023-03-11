@@ -5,12 +5,17 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
 
 	"go.f110.dev/go-memcached/client"
 	"go.f110.dev/go-memcached/testutil"
 )
+
+func init() {
+	runtime.GOMAXPROCS(4)
+}
 
 type testReplicaPool struct {
 	primaryProcess   *testutil.MemcachedProcess
