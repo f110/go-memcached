@@ -95,6 +95,9 @@ func (m *MemcachedProcess) start(t testContext) {
 	if m.args != nil {
 		arg = append(arg, m.args...)
 	}
+	if os.Getuid() == 0 {
+		arg = append(arg, "-u", "root")
+	}
 	cmd := exec.Command(memcachedBinaryPath, arg...)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("%s: %v", memcachedBinaryPath, err)
@@ -102,16 +105,21 @@ func (m *MemcachedProcess) start(t testContext) {
 	m.cmd = cmd
 
 	ticker := time.NewTicker(10 * time.Millisecond)
+	timeout := time.After(3 * time.Second)
 	for {
-		<-ticker.C
-		conn, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", m.Port))
-		if err != nil {
-			continue
+		select {
+		case <-ticker.C:
+			conn, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", m.Port))
+			if err != nil {
+				continue
+			}
+			conn.Close()
+			ticker.Stop()
+			return
+		case <-timeout:
+			t.Fatalf("Couldn't confirm to start memcached on localhost:%d", m.Port)
 		}
-		conn.Close()
-		break
 	}
-	ticker.Stop()
 }
 
 func (m *MemcachedProcess) Stop(t testContext) {
